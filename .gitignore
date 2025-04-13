@@ -1,0 +1,57 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env*.local
+
+# Generated output
+pixel_output/
+dist/
+build/
+out/
+*.log
+deployment-info.json
+airdrop-recipients.json
+
+# Hardhat files
+cache/
+artifacts/
+
+# TypeChain files
+typechain/
+typechain-types/
+
+# solidity-coverage files
+coverage/
+coverage.json
+
+# Hardhat Ignition default folder for deployments against a local node
+ignition/deployments/chain-31337
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Debug logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local test networks
+.hardhat/
