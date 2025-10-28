@@ -11,39 +11,51 @@ const pixelSize = 24;
 const scale = 20;
 const width = pixelSize * scale;
 const height = pixelSize * scale;
-const editionSize = 10000;
+const editionSize = 100000;
 
-const outputDir = path.join(__dirname, 'pixel_output');
+const outputDir = path.join(__dirname, 'pixel_avatars_output');
 const imagesDir = path.join(outputDir, 'images');
 const metadataDir = path.join(outputDir, 'metadata');
 
 // Set to track generated avatar hashes for uniqueness
 const generatedHashes = new Set();
 
-// Define the 10-tier rarity system with specific quantities
+// Define the expanded 15-tier rarity system for 100k collection
 const rarityTiers = [
-	{ name: 'Mythic', quantity: 100 },     // Top 100 - Most valuable
-	{ name: 'Divine', quantity: 400 },     // Next 400
-	{ name: 'Celestial', quantity: 500 },  // Next 500
-	{ name: 'Legendary', quantity: 1000 }, // Next 1000
-	{ name: 'Epic', quantity: 1500 },     // Next 1500
-	{ name: 'Rare', quantity: 1500 },     // Next 1500
-	{ name: 'Uncommon', quantity: 2000 },  // Next 2000
-	{ name: 'Common', quantity: 2000 },   // Next 2000
-	{ name: 'Basic', quantity: 1000 }    // Last 1000
+	{ name: 'Primordial', quantity: 50 },      // Top 50 - Ultra rare (0.05%)
+	{ name: 'Eternal', quantity: 150 },        // Next 150 (0.15%)
+	{ name: 'Mythic', quantity: 300 },         // Next 300 (0.3%)
+	{ name: 'Divine', quantity: 500 },         // Next 500 (0.5%)
+	{ name: 'Celestial', quantity: 1000 },     // Next 1000 (1%)
+	{ name: 'Transcendent', quantity: 2000 },  // Next 2000 (2%)
+	{ name: 'Legendary', quantity: 5000 },     // Next 5000 (5%)
+	{ name: 'Epic', quantity: 10000 },         // Next 10000 (10%)
+	{ name: 'Superior', quantity: 15000 },     // Next 15000 (15%)
+	{ name: 'Rare', quantity: 15000 },         // Next 15000 (15%)
+	{ name: 'Uncommon', quantity: 20000 },     // Next 20000 (20%)
+	{ name: 'Common', quantity: 15000 },       // Next 15000 (15%)
+	{ name: 'Standard', quantity: 10000 },     // Next 10000 (10%)
+	{ name: 'Basic', quantity: 5000 },         // Next 5000 (5%)
+	{ name: 'Starter', quantity: 1000 }        // Last 1000 (1%)
 ];
 
 // Character power level ranges by tier
 const powerRanges = {
-	'Mythic': { min: 90, max: 100 },
-	'Divine': { min: 80, max: 89 },
-	'Celestial': { min: 70, max: 79 },
-	'Legendary': { min: 60, max: 69 },
-	'Epic': { min: 50, max: 59 },
-	'Rare': { min: 40, max: 49 },
-	'Uncommon': { min: 30, max: 39 },
-	'Common': { min: 20, max: 29 },
-	'Basic': { min: 10, max: 19 }
+	'Primordial': { min: 98, max: 100 },
+	'Eternal': { min: 95, max: 97 },
+	'Mythic': { min: 90, max: 94 },
+	'Divine': { min: 85, max: 89 },
+	'Celestial': { min: 80, max: 84 },
+	'Transcendent': { min: 75, max: 79 },
+	'Legendary': { min: 68, max: 74 },
+	'Epic': { min: 60, max: 67 },
+	'Superior': { min: 52, max: 59 },
+	'Rare': { min: 44, max: 51 },
+	'Uncommon': { min: 36, max: 43 },
+	'Common': { min: 28, max: 35 },
+	'Standard': { min: 20, max: 27 },
+	'Basic': { min: 12, max: 19 },
+	'Starter': { min: 5, max: 11 }
 };
 
 // Character class types based on traits
@@ -94,6 +106,74 @@ function luminanceFromHSL(hsl) {
 	return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
+// WEIGHTED TRAIT SYSTEM - Rarer traits have lower probability
+const traitProbabilities = {
+	headwear: {
+		'none': 0.40,      // 40% - Most common
+		'cap': 0.25,       // 25%
+		'bandana': 0.20,   // 20%
+		'helmet': 0.10,    // 10%
+		'crown': 0.05      // 5% - Rarest
+	},
+	pet: {
+		'none': 0.50,      // 50%
+		'bird': 0.25,      // 25%
+		'robot': 0.15,     // 15%
+		'alien': 0.10      // 10% - Rarest
+	},
+	item: {
+		'none': 0.35,      // 35%
+		'drink': 0.25,     // 25%
+		'gadget': 0.15,    // 15%
+		'book': 0.12,      // 12%
+		'shield': 0.08,    // 8%
+		'sword': 0.05      // 5% - Rarest
+	},
+	clothing: {
+		't-shirt': 0.30,   // 30%
+		'hoodie': 0.25,    // 25%
+		'jacket': 0.20,    // 20%
+		'dress': 0.15,     // 15%
+		'armor': 0.10      // 10% - Rarest
+	},
+	backgroundPattern: {
+		'none': 0.40,      // 40%
+		'stripes': 0.25,   // 25%
+		'dots': 0.20,      // 20%
+		'grid': 0.10,      // 10%
+		'stars': 0.05      // 5% - Rarest
+	},
+	faceAccessory: {
+		'none': 0.50,      // 50%
+		'war paint': 0.20, // 20%
+		'scars': 0.15,     // 15%
+		'piercings': 0.10, // 10%
+		'mask': 0.05       // 5% - Rarest
+	},
+	neckAccessory: {
+		'none': 0.55,      // 55%
+		'tie': 0.20,       // 20%
+		'scarf': 0.15,     // 15%
+		'chain': 0.10      // 10% - Rarest
+	}
+};
+
+// Weighted random selection based on probabilities
+function weightedRandom(probabilities) {
+	const rand = Math.random();
+	let cumulative = 0;
+
+	for (const [value, probability] of Object.entries(probabilities)) {
+		cumulative += probability;
+		if (rand < cumulative) {
+			return value;
+		}
+	}
+
+	// Fallback to first option
+	return Object.keys(probabilities)[0];
+}
+
 function chance(probability) {
 	return Math.random() < probability;
 }
@@ -106,62 +186,52 @@ function drawOutline(ctx, x, y, w, h, color) {
 	ctx.fillRect(x*scale, (y+h)*scale, scale*w, scale);
 }
 
+// NEW: Calculate TRUE rarity score based on trait probabilities
 function calculateRarityScore(traits) {
 	let score = 0;
-	
-	// Special combinations worth a lot of points
-	if (traits.headwear === 'crown' && traits.pet === 'alien') score += 50;
-	if (traits.eyeColor === '#FFFF99' && traits.faceAccessory === 'mask') score += 40;
-	if (traits.clothing === 'armor' && traits.item === 'sword') score += 35;
-	
-	// Medium-value combinations
-	if (traits.backgroundPattern === 'stars' && traits.pet === 'robot') score += 25;
-	if (traits.headwear === 'helmet' && traits.item === 'shield') score += 20;
-	if (traits.clothing === 'hoodie' && traits.pet === 'bird') score += 15;
-	
-	// Individual trait values
-	// Headwear
-	if (traits.headwear === 'crown') score += 15;
-	else if (traits.headwear === 'helmet') score += 10;
-	else if (traits.headwear === 'bandana') score += 8;
-	else if (traits.headwear === 'cap') score += 5;
-	
-	// Pets
-	if (traits.pet === 'alien') score += 18;
-	else if (traits.pet === 'robot') score += 12;
-	else if (traits.pet === 'bird') score += 8;
-	
-	// Items
-	if (traits.item === 'sword') score += 12;
-	else if (traits.item === 'shield') score += 10;
-	else if (traits.item === 'book') score += 8;
-	else if (traits.item === 'gadget') score += 7;
-	else if (traits.item === 'drink') score += 5;
-	
-	// Background pattern
-	if (traits.backgroundPattern === 'stars') score += 7;
-	else if (traits.backgroundPattern === 'grid') score += 5;
-	else if (traits.backgroundPattern === 'dots') score += 4;
-	else if (traits.backgroundPattern === 'stripes') score += 3;
-	
-	// Face accessories
-	if (traits.faceAccessory === 'mask') score += 10;
-	else if (traits.faceAccessory === 'piercings') score += 8;
-	else if (traits.faceAccessory === 'scars') score += 6;
-	else if (traits.faceAccessory === 'war paint') score += 5;
-	
-	// Neck accessories
-	if (traits.neckAccessory === 'chain') score += 7;
-	else if (traits.neckAccessory === 'scarf') score += 5;
-	else if (traits.neckAccessory === 'tie') score += 3;
-	
-	// Color combinations
-	if (traits.bodyColor === '#330066' && traits.eyeColor === '#FFFF99') score += 12;
-	if (traits.clothingColor === '#663300' && traits.mouthColor === '#FFCCFF') score += 10;
-	
-	// Add some randomness (but not too much)
-	score += Math.random() * 5;
-	
+
+	// Score based on actual probability of each trait
+	if (traits.headwear && traitProbabilities.headwear[traits.headwear]) {
+		score += (1 - traitProbabilities.headwear[traits.headwear]) * 100;
+	}
+
+	if (traits.pet && traitProbabilities.pet[traits.pet]) {
+		score += (1 - traitProbabilities.pet[traits.pet]) * 100;
+	}
+
+	if (traits.item && traitProbabilities.item[traits.item]) {
+		score += (1 - traitProbabilities.item[traits.item]) * 100;
+	}
+
+	if (traits.clothing && traitProbabilities.clothing[traits.clothing]) {
+		score += (1 - traitProbabilities.clothing[traits.clothing]) * 80;
+	}
+
+	if (traits.backgroundPattern && traitProbabilities.backgroundPattern[traits.backgroundPattern]) {
+		score += (1 - traitProbabilities.backgroundPattern[traits.backgroundPattern]) * 60;
+	}
+
+	if (traits.faceAccessory && traitProbabilities.faceAccessory[traits.faceAccessory]) {
+		score += (1 - traitProbabilities.faceAccessory[traits.faceAccessory]) * 100;
+	}
+
+	if (traits.neckAccessory && traitProbabilities.neckAccessory[traits.neckAccessory]) {
+		score += (1 - traitProbabilities.neckAccessory[traits.neckAccessory]) * 60;
+	}
+
+	// Ultra-rare trait combinations get massive bonuses
+	if (traits.headwear === 'crown' && traits.pet === 'alien') score += 200;
+	if (traits.item === 'sword' && traits.clothing === 'armor') score += 150;
+	if (traits.faceAccessory === 'mask' && traits.backgroundPattern === 'stars') score += 180;
+	if (traits.headwear === 'crown' && traits.neckAccessory === 'chain') score += 160;
+	if (traits.pet === 'alien' && traits.item === 'sword') score += 140;
+	if (traits.pet === 'robot' && traits.backgroundPattern === 'stars') score += 120;
+
+	// Specific color combos that are very rare
+	if (traits.eyeColor === '#FFFF99' && traits.faceAccessory === 'mask') score += 100;
+	if (traits.bodyColor === '#330066' && traits.eyeColor === '#FFFF99') score += 90;
+	if (traits.clothingColor === '#663300' && traits.headwear === 'crown') score += 85;
+
 	return score;
 }
 
@@ -178,9 +248,8 @@ function drawAvatar(ctx, tierName = null) {
 	ctx.fillStyle = gradient;
 	ctx.fillRect(0, 0, width, height);
 
-	// Background pattern type
-	const bgPatterns = ['none', 'stars', 'stripes', 'dots', 'grid'];
-	const bgPattern = bgPatterns[Math.floor(Math.random()*bgPatterns.length)];
+	// Background pattern type - WEIGHTED
+	const bgPattern = weightedRandom(traitProbabilities.backgroundPattern);
 	traits.backgroundPattern = bgPattern;
 	if (bgPattern === 'stars') {
 		for (let i = 0; i < 30; i++) {
@@ -252,13 +321,11 @@ function drawAvatar(ctx, tierName = null) {
 	ctx.fillRect(10*scale, 11*scale, scale, scale);
 	ctx.fillRect(13*scale, 11*scale, scale, scale);
 
-	// --- Decide conditional traits early ---
-	const headwears = ['none', 'cap', 'crown', 'helmet', 'bandana'];
-	const headwear = headwears[Math.floor(Math.random()*headwears.length)];
+	// --- Decide conditional traits early - WEIGHTED ---
+	const headwear = weightedRandom(traitProbabilities.headwear);
 	traits.headwear = headwear;
 
-	const faceAccessories = ['none', 'mask', 'piercings', 'scars', 'war paint'];
-	const faceAccessory = faceAccessories[Math.floor(Math.random()*faceAccessories.length)];
+	const faceAccessory = weightedRandom(traitProbabilities.faceAccessory);
 	traits.faceAccessory = faceAccessory;
 	// --- End conditional trait decisions ---
 
@@ -340,9 +407,8 @@ function drawAvatar(ctx, tierName = null) {
 	if (faceAccessory !== 'none') traits.faceAccessoryColor = faceAccessoryColor; // Add color trait if applicable
 
 
-	// Neck accessories (centered below head)
-	const neckAccessories = ['none', 'chain', 'tie', 'scarf'];
-	const neckAccessory = neckAccessories[Math.floor(Math.random()*neckAccessories.length)];
+	// Neck accessories - WEIGHTED
+	const neckAccessory = weightedRandom(traitProbabilities.neckAccessory);
 	traits.neckAccessory = neckAccessory;
 	let neckAccessoryColor = 'none';
 	if (neckAccessory === 'chain') {
@@ -361,9 +427,8 @@ function drawAvatar(ctx, tierName = null) {
     if (neckAccessory !== 'none') traits.neckAccessoryColor = neckAccessoryColor; // Add color trait if applicable
 
 
-	// Clothing (centered on body)
-	const clothes = ['hoodie', 'jacket', 'armor', 'dress', 't-shirt'];
-	const clothing = clothes[Math.floor(Math.random()*clothes.length)];
+	// Clothing - WEIGHTED
+	const clothing = weightedRandom(traitProbabilities.clothing);
 	traits.clothing = clothing;
 	const clothingColor = pickCharColor();
 	traits.clothingColor = clothingColor; // Assign trait
@@ -378,9 +443,8 @@ function drawAvatar(ctx, tierName = null) {
 	// TODO: Add logic to handle clashes between clothing and neck accessories? (e.g., draw neck accessory after clothing if it's a tie/scarf?)
 
 
-	// Handheld items (near hands)
-	const items = ['none', 'sword', 'shield', 'drink', 'book', 'gadget'];
-	const item = items[Math.floor(Math.random()*items.length)];
+	// Handheld items - WEIGHTED
+	const item = weightedRandom(traitProbabilities.item);
 	traits.item = item;
 	let itemColor = 'none'; // Or primary color
 	if (item === 'sword') {
@@ -411,9 +475,8 @@ function drawAvatar(ctx, tierName = null) {
     if (item !== 'none') traits.itemColor = itemColor; // Add color trait if applicable
 
 
-	// Pets (near feet)
-	const pets = ['none', 'bird', 'robot', 'alien'];
-	const pet = pets[Math.floor(Math.random()*pets.length)];
+	// Pets - WEIGHTED
+	const pet = weightedRandom(traitProbabilities.pet);
 	traits.pet = pet;
 	let petColor = 'none';
 	if (pet === 'bird') {
@@ -671,7 +734,7 @@ function generateCharacterAttributes(traits, tierName) {
 function generateSecondaryAbilities(characterClass, tierName) {
 	const abilities = [];
 	const tier = tierName.toLowerCase();
-	const tierLevel = ['basic', 'common', 'uncommon', 'rare', 'epic', 'legendary', 'celestial', 'divine', 'mythic'].indexOf(tier);
+	const tierLevel = ['starter', 'basic', 'standard', 'common', 'uncommon', 'rare', 'superior', 'epic', 'legendary', 'transcendent', 'celestial', 'divine', 'mythic', 'eternal', 'primordial'].indexOf(tier);
 	
 	// Number of abilities based on tier (higher tier = more abilities)
 	const numAbilities = Math.min(3, Math.max(1, Math.floor(tierLevel / 3) + 1));
@@ -708,114 +771,174 @@ function generateSpecialAbility(characterClass, rarityTier) {
 	
 	const abilities = {
 		warrior: {
+			primordial: "Universe Breaker",
+			eternal: "Infinite Warfare",
 			mythic: "Titan's Fury",
 			divine: "Blade Storm",
 			celestial: "Heroic Strike",
+			transcendent: "Warrior's Ascension",
 			legendary: "Crushing Blow",
 			epic: "Mighty Swing",
+			superior: "Enhanced Strike",
 			rare: "Power Attack",
 			uncommon: "Cleave",
 			common: "Heavy Strike",
-			basic: "Basic Slash"
+			standard: "Firm Slash",
+			basic: "Basic Slash",
+			starter: "Weak Swing"
 		},
 		mage: {
+			primordial: "Reality Rewrite",
+			eternal: "Cosmic Annihilation",
 			mythic: "Arcane Singularity",
 			divine: "Meteor Shower",
 			celestial: "Astral Beam",
+			transcendent: "Dimensional Rift",
 			legendary: "Elemental Mastery",
 			epic: "Fireball",
+			superior: "Greater Blast",
 			rare: "Frost Nova",
 			uncommon: "Arcane Missiles",
 			common: "Magic Bolt",
-			basic: "Spark"
+			standard: "Simple Spell",
+			basic: "Spark",
+			starter: "Cantrip"
 		},
 		rogue: {
+			primordial: "Void Assassination",
+			eternal: "Eternal Shadow",
 			mythic: "Shadow Dance",
 			divine: "Phantom Strike",
 			celestial: "Thousand Cuts",
+			transcendent: "Death's Embrace",
 			legendary: "Deathmark",
 			epic: "Backstab",
+			superior: "Precise Strike",
 			rare: "Venomous Strike",
 			uncommon: "Stealth Attack",
 			common: "Quick Slice",
-			basic: "Sneak"
+			standard: "Swift Cut",
+			basic: "Sneak",
+			starter: "Poke"
 		},
 		paladin: {
+			primordial: "God's Judgement",
+			eternal: "Heaven's Decree",
 			mythic: "Divine Intervention",
 			divine: "Holy Wrath",
 			celestial: "Sacred Shield",
+			transcendent: "Radiant Ascension",
 			legendary: "Righteous Fury",
 			epic: "Holy Light",
+			superior: "Blessed Aura",
 			rare: "Divine Protection",
 			uncommon: "Blessed Strike",
 			common: "Healing Touch",
-			basic: "Minor Heal"
+			standard: "Minor Blessing",
+			basic: "Minor Heal",
+			starter: "Prayer"
 		},
 		ranger: {
+			primordial: "Nature's Apocalypse",
+			eternal: "Infinite Hunt",
 			mythic: "Arrow Storm",
 			divine: "Piercing Shot",
 			celestial: "Multishot",
+			transcendent: "Beast Lord",
 			legendary: "Hawk's Eye",
 			epic: "Aimed Shot",
+			superior: "Focused Shot",
 			rare: "Trueshot",
 			uncommon: "Quick Shot",
 			common: "Steady Shot",
-			basic: "Simple Shot"
+			standard: "Basic Shot",
+			basic: "Simple Shot",
+			starter: "Pebble Toss"
 		},
 		necromancer: {
+			primordial: "End of All Life",
+			eternal: "Eternal Undeath",
 			mythic: "Army of the Dead",
 			divine: "Soul Harvest",
 			celestial: "Death Wave",
+			transcendent: "Lich Transformation",
 			legendary: "Bone Armor",
 			epic: "Raise Dead",
+			superior: "Soul Siphon",
 			rare: "Life Drain",
 			uncommon: "Curse",
 			common: "Shadow Bolt",
-			basic: "Bone Spike"
+			standard: "Dark Touch",
+			basic: "Bone Spike",
+			starter: "Spooky Gesture"
 		},
 		druid: {
+			primordial: "Gaia's Wrath",
+			eternal: "Primeval Evolution",
 			mythic: "Force of Nature",
 			divine: "Celestial Alignment",
 			celestial: "Starfall",
+			transcendent: "Ancient Guardian",
 			legendary: "Wild Growth",
 			epic: "Shapeshift",
+			superior: "Nature's Call",
 			rare: "Entangling Roots",
 			uncommon: "Healing Seed",
 			common: "Thorns",
-			basic: "Nature's Touch"
+			standard: "Leaf Swirl",
+			basic: "Nature's Touch",
+			starter: "Twig Snap"
 		},
 		bard: {
+			primordial: "Universal Harmony",
+			eternal: "Eternal Ballad",
 			mythic: "Symphony of Destruction",
 			divine: "Captivating Performance",
 			celestial: "Harmonious Melody",
+			transcendent: "Maestro's Opus",
 			legendary: "Inspiring Anthem",
 			epic: "Battle Hymn",
+			superior: "Rousing Song",
 			rare: "Healing Song",
 			uncommon: "Soothing Tune",
 			common: "Minor Chord",
-			basic: "Simple Note"
+			standard: "Simple Melody",
+			basic: "Simple Note",
+			starter: "Hum"
 		},
 		monk: {
+			primordial: "One With Everything",
+			eternal: "Perfect Enlightenment",
 			mythic: "Transcendence",
 			divine: "Spirit Burst",
 			celestial: "Flying Dragon",
+			transcendent: "Nirvana State",
 			legendary: "Inner Peace",
 			epic: "Flying Kick",
+			superior: "Chi Burst",
 			rare: "Chi Wave",
 			uncommon: "Focused Strike",
 			common: "Palm Strike",
-			basic: "Jab"
+			standard: "Basic Punch",
+			basic: "Jab",
+			starter: "Poke"
 		},
 		guardian: {
+			primordial: "Cosmic Sentinel",
+			eternal: "Eternal Bastion",
 			mythic: "Eternal Vigilance",
 			divine: "Guardian's Shield",
 			celestial: "Protective Aura",
+			transcendent: "Unbreakable Will",
 			legendary: "Stalwart Defense",
 			epic: "Defensive Stance",
+			superior: "Strong Guard",
 			rare: "Shield Wall",
 			uncommon: "Taunt",
 			common: "Block",
-			basic: "Defend"
+			standard: "Basic Defense",
+			basic: "Defend",
+			starter: "Cover"
 		}
 	};
 	
@@ -1249,7 +1372,7 @@ function generateStoryArc(attributes) {
 function generateSpecialTraits(characterClass, tierName) {
 	const specialTraits = [];
 	const tier = tierName.toLowerCase();
-	const tierLevel = ['basic', 'common', 'uncommon', 'rare', 'epic', 'legendary', 'celestial', 'divine', 'mythic'].indexOf(tier);
+	const tierLevel = ['starter', 'basic', 'standard', 'common', 'uncommon', 'rare', 'superior', 'epic', 'legendary', 'transcendent', 'celestial', 'divine', 'mythic', 'eternal', 'primordial'].indexOf(tier);
 	
 	// Number of special traits based on tier
 	const numTraits = Math.min(3, Math.max(1, Math.floor(tierLevel / 3) + 1));
@@ -1322,7 +1445,7 @@ function generateSpecialTraits(characterClass, tierName) {
 	
 	// For higher tiers, add universal traits to the pool
 	let traitPool = [...availableTraits];
-	if (tierLevel >= 6) { // Legendary and above
+	if (tierLevel >= 8) { // Legendary and above (8+ in new 15-tier system)
 		traitPool = [...traitPool, ...universalTraits];
 	}
 	
