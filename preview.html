@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel Cats NFT Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        }
+
+        .card-image {
+            width: 100%;
+            height: 300px;
+            background: #f0f0f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+
+        .card-content {
+            padding: 20px;
+        }
+
+        .card-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .traits {
+            display: grid;
+            gap: 8px;
+        }
+
+        .trait {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .trait-type {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .trait-value {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .rarity-score {
+            margin-top: 15px;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .stats {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            color: #333;
+        }
+
+        .stats h2 {
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .stat-item:last-child {
+            border-bottom: none;
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.5rem;
+            padding: 50px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2rem;
+            }
+
+            .gallery {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🐱 Pixel Cats NFT Collection</h1>
+            <p class="subtitle">Unique pixel art cats generated with TypeScript & Bun</p>
+        </header>
+
+        <div id="app">
+            <div class="loading">Loading your Pixel Cats...</div>
+        </div>
+    </div>
+
+    <script>
+        async function loadCollection() {
+            try {
+                // Load collection metadata
+                const collectionRes = await fetch('./output/collection.json');
+                const collection = await collectionRes.json();
+
+                // Load rarity report
+                const rarityRes = await fetch('./output/rarity_report.json');
+                const rarityReport = await rarityRes.json();
+
+                // Create rarity score lookup
+                const rarityScores = {};
+                rarityReport.most_rare.forEach(item => {
+                    rarityScores[item.edition] = item.score;
+                });
+
+                // Load all NFTs
+                const nfts = [];
+                for (let i = 1; i <= collection.total_supply; i++) {
+                    const metadataRes = await fetch(`./output/metadata/${i}.json`);
+                    const metadata = await metadataRes.json();
+                    nfts.push({
+                        ...metadata,
+                        rarityScore: rarityScores[i] || 0
+                    });
+                }
+
+                // Render the app
+                renderApp(collection, rarityReport, nfts);
+            } catch (error) {
+                document.getElementById('app').innerHTML = `
+                    <div class="loading">
+                        <p>Error loading collection. Make sure to:</p>
+                        <ol style="text-align: left; max-width: 500px; margin: 20px auto;">
+                            <li>Generate NFTs first: <code>bun run generate 10</code></li>
+                            <li>Open this file from a local server or open output folder</li>
+                        </ol>
+                    </div>
+                `;
+            }
+        }
+
+        function renderApp(collection, rarityReport, nfts) {
+            const app = document.getElementById('app');
+
+            // Render stats
+            const statsHTML = `
+                <div class="stats">
+                    <h2>Collection Statistics</h2>
+                    <div class="stat-item">
+                        <span>Total Supply:</span>
+                        <strong>${collection.total_supply}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Average Rarity:</span>
+                        <strong>${rarityReport.average_rarity.toFixed(2)}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Most Rare:</span>
+                        <strong>Cat #${rarityReport.most_rare[0].edition} (${rarityReport.most_rare[0].score})</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Common:</span>
+                        <strong>${collection.rarity_distribution.common}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Uncommon:</span>
+                        <strong>${collection.rarity_distribution.uncommon}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Rare:</span>
+                        <strong>${collection.rarity_distribution.rare}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Epic:</span>
+                        <strong>${collection.rarity_distribution.epic}</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span>Legendary:</span>
+                        <strong>${collection.rarity_distribution.legendary}</strong>
+                    </div>
+                </div>
+            `;
+
+            // Render gallery
+            const galleryHTML = nfts.map(nft => `
+                <div class="card">
+                    <div class="card-image">
+                        <img src="./output/images/${nft.edition}.png" alt="${nft.name}">
+                    </div>
+                    <div class="card-content">
+                        <div class="card-title">${nft.name}</div>
+                        <div class="traits">
+                            ${nft.attributes.map(attr => `
+                                <div class="trait">
+                                    <span class="trait-type">${attr.trait_type}</span>
+                                    <span class="trait-value">${attr.value}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="rarity-score">
+                            Rarity Score: ${nft.rarityScore}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            app.innerHTML = `
+                ${statsHTML}
+                <br>
+                <div class="gallery">
+                    ${galleryHTML}
+                </div>
+            `;
+        }
+
+        // Load collection on page load
+        loadCollection();
+    </script>
+</body>
+</html>
