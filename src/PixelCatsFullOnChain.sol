@@ -3,6 +3,7 @@
 pragma solidity ^0.8.30;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -14,9 +15,10 @@ interface IPixelCatsRenderer {
 /**
  * @title PixelCatsFullOnChainV2
  * @dev Split architecture - Main contract + Renderer contract
- * Supports 2,016,000 unique combinations for 100k+ NFTs
+ * Supports 31.5M+ unique combinations for 100k+ NFTs
+ * Includes ERC2981 royalty support for OpenSea creator earnings
  */
-contract PixelCatsFullOnChainV2 is ERC721, Ownable {
+contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
     using Strings for uint256;
 
     uint256 private _tokenIdCounter;
@@ -25,6 +27,8 @@ contract PixelCatsFullOnChainV2 is ERC721, Ownable {
 
     constructor(address _renderer) ERC721("BTB CAT", "BTBC") Ownable(msg.sender) {
         renderer = IPixelCatsRenderer(_renderer);
+        // Set 5% royalty fee to contract owner
+        _setDefaultRoyalty(msg.sender, 500); // 500 basis points = 5%
     }
 
     function setRenderer(address _renderer) external onlyOwner {
@@ -283,5 +287,26 @@ contract PixelCatsFullOnChainV2 is ERC721, Ownable {
 
     function totalSupply() external view returns (uint256) {
         return _tokenIdCounter;
+    }
+
+    /**
+     * @dev Update royalty info (owner only)
+     * @param receiver Address to receive royalties
+     * @param feeNumerator Fee in basis points (500 = 5%)
+     */
+    function setDefaultRoyalty(address receiver, uint96 feeNumerator) external onlyOwner {
+        _setDefaultRoyalty(receiver, feeNumerator);
+    }
+
+    /**
+     * @dev Override supportsInterface to include ERC2981
+     */
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(ERC721, ERC2981)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
     }
 }
