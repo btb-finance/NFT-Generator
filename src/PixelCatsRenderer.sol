@@ -207,9 +207,9 @@ contract PixelCatsRenderer {
     }
 
     function _getBodyColor(uint256 seed) private pure returns (string memory) {
-        // Casting to uint8 is safe because we mod by 20, max value is 19
+        // Casting to uint8 is safe because we mod by 30, max value is 29
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 colorIndex = uint8(seed % 20);
+        uint8 colorIndex = uint8(seed % 30);
 
         if (colorIndex == 0) return "#FF8C42";      // Orange
         if (colorIndex == 1) return "#2C2C2C";      // Black
@@ -230,11 +230,22 @@ contract PixelCatsRenderer {
         if (colorIndex == 16) return "#800020";     // Burgundy
         if (colorIndex == 17) return "#000080";     // Navy
         if (colorIndex == 18) return "#50C878";     // Emerald
-        return "#B76E79";                            // Rose Gold
+        if (colorIndex == 19) return "#B76E79";     // Rose Gold
+        if (colorIndex == 20) return "#DC143C";     // Crimson
+        if (colorIndex == 21) return "#40E0D0";     // Turquoise
+        if (colorIndex == 22) return "#8A2BE2";     // Violet
+        if (colorIndex == 23) return "#808000";     // Olive
+        if (colorIndex == 24) return "#9B30FF";     // Cosmic Purple
+        if (colorIndex == 25) return "#39FF14";     // Neon Green
+        if (colorIndex == 26) return "#FF6347";     // Sunset Orange
+        if (colorIndex == 27) return "#B9F2FF";     // Diamond
+        if (colorIndex == 28) return "#4B0082";     // Galaxy
+        return "#E0B0FF";                            // Holographic
     }
 
     function _getEyeColor(uint256 seed) private pure returns (string memory) {
-        uint8 colorIndex = uint8((seed >> 32) % 15);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint8 colorIndex = uint8((seed >> 32) % 20);
 
         if (colorIndex == 0) return "#00FF00";      // Green
         if (colorIndex == 1) return "#0000FF";      // Blue
@@ -250,7 +261,12 @@ contract PixelCatsRenderer {
         if (colorIndex == 11) return "#C0C0C0";     // Silver
         if (colorIndex == 12) return "#00FF00";     // Lime
         if (colorIndex == 13) return "#4B0082";     // Indigo
-        return "#FFA500";                            // Orange
+        if (colorIndex == 14) return "#FFA500";     // Orange
+        if (colorIndex == 15) return "#0F52BA";     // Sapphire
+        if (colorIndex == 16) return "#50C878";     // Emerald
+        if (colorIndex == 17) return "#FF1493";     // Rainbow
+        if (colorIndex == 18) return "#FF0033";     // Laser Red
+        return "#1E90FF";                            // Cosmic Blue
     }
 
     function _adjustBrightness(string memory /* color */, int8 /* adjustment */) private pure returns (string memory) {
