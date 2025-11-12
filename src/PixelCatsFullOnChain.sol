@@ -21,9 +21,17 @@ interface IPixelCatsRenderer {
 contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
     using Strings for uint256;
 
-    uint256 private _tokenIdCounter;
+    uint256 private _tokenIdCounter = 1; // Start from 1, not 0
     mapping(uint256 => uint256) private tokenTraits;
     IPixelCatsRenderer public renderer;
+
+    // Supply and pricing
+    uint256 public constant MAX_SUPPLY = 88888;
+    uint256 public mintPrice = 0.0002 ether; // Default price, can be updated
+
+    // Events
+    event MintPriceUpdated(uint256 newPrice);
+    event NFTPurchased(address indexed buyer, uint256 amount, uint256 totalCost);
 
     constructor(address _renderer) ERC721("BTB CAT", "BTBC") Ownable(msg.sender) {
         renderer = IPixelCatsRenderer(_renderer);
@@ -35,19 +43,22 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
         renderer = IPixelCatsRenderer(_renderer);
     }
 
-    function mint() external payable {
-        uint256 tokenId = _tokenIdCounter++;
-        uint256 traits = _generateTraits(tokenId);
-        tokenTraits[tokenId] = traits;
-        _safeMint(msg.sender, tokenId);
+    /**
+     * @dev Set the mint price (admin only)
+     * @param _price New price in wei
+     */
+    function setMintPrice(uint256 _price) external onlyOwner {
+        mintPrice = _price;
+        emit MintPriceUpdated(_price);
     }
 
     /**
-     * @dev Bulk mint multiple cats at once (FREE for testing!)
-     * @param amount Number of cats to mint (max 200 per transaction)
+     * @dev Admin mint - FREE minting for owner only
+     * @param amount Number of NFTs to mint (max 200 per transaction)
      */
-    function bulkMint(uint256 amount) external payable {
+    function adminMint(uint256 amount) external onlyOwner {
         require(amount > 0 && amount <= 200, "Amount must be 1-200");
+        require(_tokenIdCounter + amount <= MAX_SUPPLY, "Exceeds max supply");
 
         for (uint256 i = 0; i < amount; i++) {
             uint256 tokenId = _tokenIdCounter++;
@@ -55,6 +66,41 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
             tokenTraits[tokenId] = traits;
             _safeMint(msg.sender, tokenId);
         }
+    }
+
+    /**
+     * @dev Public buy function - Users buy NFTs with ETH
+     * @param amount Number of NFTs to buy (max 500 per transaction)
+     */
+    function buy(uint256 amount) external payable {
+        require(amount > 0 && amount <= 500, "Amount must be 1-500");
+        require(_tokenIdCounter + amount <= MAX_SUPPLY, "Exceeds max supply");
+
+        uint256 totalCost = mintPrice * amount;
+        require(msg.value >= totalCost, "Insufficient ETH sent");
+
+        for (uint256 i = 0; i < amount; i++) {
+            uint256 tokenId = _tokenIdCounter++;
+            uint256 traits = _generateTraits(tokenId);
+            tokenTraits[tokenId] = traits;
+            _safeMint(msg.sender, tokenId);
+        }
+
+        emit NFTPurchased(msg.sender, amount, totalCost);
+
+        // Refund excess ETH
+        if (msg.value > totalCost) {
+            payable(msg.sender).transfer(msg.value - totalCost);
+        }
+    }
+
+    /**
+     * @dev Withdraw collected ETH (admin only)
+     */
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds to withdraw");
+        payable(owner()).transfer(balance);
     }
 
     function _generateTraits(uint256 tokenId) private view returns (uint256) {
@@ -72,7 +118,7 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
         string memory rarity = _getRarityTier(tokenTraits[tokenId]);
         string memory json = string(abi.encodePacked(
             '{"name":"BTB CAT ', rarity, ' #', tokenId.toString(), '",',
-            '"description":"100,000 BTB CATs living fully on-chain. Following BTB bonding curve, each token is backed by real BTB with unique pixel art combinations.",',
+            '"description":"88888 BTB CATs living fully on-chain. Following BTB bonding curve, each token is backed by real BTB with unique pixel art combinations.",',
             '"attributes":[',
             _getAttributes(tokenTraits[tokenId]),
             '],',
@@ -97,23 +143,29 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
 
     /**
      * @dev Get generation based on total minted supply
+     * Genesis: 0-17,777 (20% = first 17,777 NFTs)
+     * Alpha: 17,778-35,555 (20% = next 17,777 NFTs)
+     * Beta: 35,556-53,332 (20% = next 17,777 NFTs)
+     * Gamma: 53,333-71,110 (20% = next 17,777 NFTs)
+     * Delta: 71,111-88,888 (20% = last 17,778 NFTs)
      */
     function _getGeneration() private view returns (string memory) {
         uint256 supply = _tokenIdCounter;
-        if (supply < 10000) return "Genesis";
-        if (supply < 25000) return "Alpha";
-        if (supply < 50000) return "Beta";
-        if (supply < 75000) return "Gamma";
+        if (supply <= 17777) return "Genesis";
+        if (supply <= 35555) return "Alpha";
+        if (supply <= 53332) return "Beta";
+        if (supply <= 71110) return "Gamma";
         return "Delta";
     }
 
     /**
      * @dev Calculate rarity tier based on trait combinations
-     * Mythic: 1% - Golden Crown/Wizard Hat + Rainbow/Chrome/Rose Gold body
-     * Legendary: 4% - Golden Crown, Wizard Hat, or rare body colors
-     * Epic: 10% - Multiple rare traits
-     * Rare: 20% - At least one rare trait
-     * Common: 65% - Standard traits
+     * Out of 88,888 total supply:
+     * Mythic: ~1% (~889 NFTs) - Golden Crown/Wizard Hat + Rainbow/Chrome/Rose Gold body
+     * Legendary: ~4% (~3,556 NFTs) - Golden Crown, Wizard Hat, or rare body colors
+     * Epic: ~10% (~8,889 NFTs) - Multiple rare traits
+     * Rare: ~20% (~17,778 NFTs) - At least one rare trait
+     * Common: ~65% (~57,777 NFTs) - Standard traits
      */
     function _getRarityTier(uint256 seed) private pure returns (string memory) {
         // All casts are safe because we mod by small values
@@ -157,11 +209,11 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
         }
 
         // Determine tier based on score
-        if (rarityScore >= 6) return "Mythic";      // ~1%
-        if (rarityScore >= 4) return "Legendary";   // ~4%
-        if (rarityScore >= 3) return "Epic";        // ~10%
-        if (rarityScore >= 1) return "Rare";        // ~20%
-        return "Common";                             // ~65%
+        if (rarityScore >= 6) return "Mythic";      // ~1% = ~889 NFTs out of 88,888
+        if (rarityScore >= 4) return "Legendary";   // ~4% = ~3,556 NFTs
+        if (rarityScore >= 3) return "Epic";        // ~10% = ~8,889 NFTs
+        if (rarityScore >= 1) return "Rare";        // ~20% = ~17,778 NFTs
+        return "Common";                             // ~65% = ~57,777 NFTs
     }
 
     function _getBodyName(uint256 seed) private pure returns (string memory) {
