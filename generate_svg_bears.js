@@ -25,6 +25,10 @@ function randomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function randomFloat(min, max) {
+    return Math.random() * (max - min) + min;
+}
+
 // --- CURATED PALETTES ---
 const palettes = {
     'Matcha Latte': { bg: ['#F0F4C3', '#C5E1A5'], fur: '#7CB342', accent: '#DCEDC8', eye: '#33691E' },
@@ -56,19 +60,6 @@ class SVGBuilder {
         this.elements.push(element);
     }
 
-    // Organic gradients
-    addGradient(id, colors, type = 'linear') {
-        const stops = colors.map((c, i) =>
-            `<stop offset="${(i / (colors.length - 1)) * 100}%" stop-color="${c}" />`
-        ).join('');
-
-        if (type === 'linear') {
-            this.addDef(`<linearGradient id="${id}" x1="0%" y1="0%" x2="0%" y2="100%">${stops}</linearGradient>`);
-        } else {
-            this.addDef(`<radialGradient id="${id}" cx="50%" cy="50%" r="50%" fx="50%" fy="20%">${stops}</radialGradient>`);
-        }
-    }
-
     toXML() {
         return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.width} ${this.height}" width="800" height="800">
   <defs>${this.defs.join('')}</defs>
@@ -77,125 +68,200 @@ class SVGBuilder {
     }
 }
 
-// --- PREMIUM BEAR GENERATOR ---
+// --- ULTRA PREMIUM BEAR GENERATOR ---
 function generateBear(index) {
     const svg = new SVGBuilder(1000, 1000);
     const traits = {};
 
-    // 1. Palette
+    // 1. Palette & Background
     const paletteName = pick(Object.keys(palettes));
     const pal = palettes[paletteName];
     traits.Palette = paletteName;
 
-    // 2. Background (Soft Gradient)
+    // Background Gradient (Diagonal)
     const bgId = `bg-${index}`;
-    svg.addGradient(bgId, pal.bg, 'linear');
+    svg.addDef(`<linearGradient id="${bgId}" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${pal.bg[0]}" />
+        <stop offset="100%" stop-color="${pal.bg[1]}" />
+    </linearGradient>`);
     svg.add(`<rect width="1000" height="1000" fill="url(#${bgId})" />`);
 
-    // Background Pattern (Subtle)
-    for (let i = 0; i < 10; i++) {
+    // Background Bokeh/Sparkles
+    for (let i = 0; i < 15; i++) {
         const cx = randomInt(0, 1000);
         const cy = randomInt(0, 1000);
-        const r = randomInt(50, 150);
-        svg.add(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="#FFF" fill-opacity="0.05" />`);
+        const r = randomInt(20, 100);
+        const opacity = randomFloat(0.05, 0.15);
+        svg.add(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="#FFF" fill-opacity="${opacity}" filter="blur(5px)" />`);
+
+        // Occasional sparkle
+        if (Math.random() > 0.8) {
+            svg.add(`<circle cx="${cx}" cy="${cy}" r="${r / 4}" fill="#FFF" fill-opacity="0.4" />`);
+        }
     }
 
-    // 3. The Bear Shape (Organic Path)
+    // 2. Fur Texture & Body
+    // We'll use a complex gradient for the fur to give it volume
     const furId = `fur-${index}`;
-    // Fur gradient: slightly lighter top to darker bottom
-    svg.addGradient(furId, [pal.fur, pal.fur], 'radial'); // Solid for now, or subtle gradient
+    svg.addDef(`<radialGradient id="${furId}" cx="40%" cy="40%" r="60%" fx="40%" fy="30%">
+        <stop offset="0%" stop-color="${pal.fur}" /> <!-- Highlight area -->
+        <stop offset="70%" stop-color="${pal.fur}" />
+        <stop offset="100%" stop-color="${pal.accent}" stop-opacity="0.3" /> <!-- Rim shadow mix -->
+    </radialGradient>`);
 
-    // HEAD & BODY
-    // Using a "squircle" path modified to be a cute bear shape
-    // Center: 500, 500
+    // EARS with FLUFF
+    // We add small "tufts" by manipulating the path
+    const leftEarPath = `
+        M 220 400 
+        C 200 300 250 220 350 250 
+        C 380 260 390 300 370 350 Z
+    `;
+    const rightEarPath = `
+        M 780 400 
+        C 800 300 750 220 650 250 
+        C 620 260 610 300 630 350 Z
+    `;
 
-    // Ears (Behind head)
-    const lEarPath = `M 300 350 C 200 350 180 500 280 500 C 300 500 300 450 350 450 Z`; // Simplified path logic
-    // Actually simpler: Circles are fine for ears if shaded well
-    svg.add(`<circle cx="300" cy="350" r="80" fill="${pal.fur}" />`); // Left Ear Base
-    svg.add(`<circle cx="700" cy="350" r="80" fill="${pal.fur}" />`); // Right Ear Base
+    // Draw Ears (Bottom layer)
+    svg.add(`<path d="${leftEarPath}" fill="url(#${furId})" transform="rotate(-10 300 350)" />`);
+    svg.add(`<path d="${rightEarPath}" fill="url(#${furId})" transform="rotate(10 700 350)" />`);
 
-    // Inner Ears
-    svg.add(`<circle cx="300" cy="350" r="50" fill="${pal.accent}" fill-opacity="0.8" />`);
-    svg.add(`<circle cx="700" cy="350" r="50" fill="${pal.accent}" fill-opacity="0.8" />`);
+    // Inner Ear Glow
+    svg.add(`<ellipse cx="300" cy="320" rx="35" ry="45" fill="${pal.accent}" fill-opacity="0.6" filter="blur(2px)" transform="rotate(-15 300 320)" />`);
+    svg.add(`<ellipse cx="700" cy="320" rx="35" ry="45" fill="${pal.accent}" fill-opacity="0.6" filter="blur(2px)" transform="rotate(15 700 320)" />`);
 
-    // Head Shape (Organic Bezier)
-    // Starting top center, going clockwise
+    // HEAD SHAPE (Textured / Fluffy)
+    // Instead of a perfect squircle, we gently wobble or bulge the cheeks specifically
     const headPath = `
-        M 500 250
-        C 700 250 800 400 800 550
-        C 800 750 700 850 500 850
-        C 300 850 200 750 200 550
-        C 200 400 300 250 500 250
+        M 500 220
+        C 650 220 780 320 820 500
+        C 840 600 820 750 700 820
+        C 600 860 400 860 300 820
+        C 180 750 160 600 180 500
+        C 220 320 350 220 500 220
         Z
     `;
-    svg.add(`<path d="${headPath}" fill="${pal.fur}" />`);
 
-    // Head Highlight (Rim Light)
-    const highlightPath = `
-        M 500 265
-        C 650 265 750 380 770 500
-        M 500 265
-        C 350 265 250 380 230 500
-    `;
-    // svg.add(`<path d="${highlightPath}" fill="none" stroke="#FFF" stroke-width="15" stroke-opacity="0.3" stroke-linecap="round" />`);
-    svg.add(`<ellipse cx="400" cy="350" rx="80" ry="40" transform="rotate(-45 400 350)" fill="#FFF" fill-opacity="0.2" />`); // Forehead Shine
+    // Drop Shadow for geometric depth
+    svg.add(`<path d="${headPath}" transform="translate(0, 15)" fill="#000" fill-opacity="0.15" filter="blur(10px)" />`);
 
-    // 4. Face Features
+    // Main Head
+    svg.add(`<path d="${headPath}" fill="url(#${furId})" />`);
 
-    // Snout (OVAL)
-    svg.add(`<ellipse cx="500" cy="620" rx="140" ry="110" fill="#FFF" fill-opacity="0.2" />`); // Snout shadow/base
-    svg.add(`<ellipse cx="500" cy="600" rx="140" ry="110" fill="${pal.accent}" fill-opacity="0.3" />`); // Snout color
+    // Rim Light (Top)
+    svg.add(`<path d="M 300 250 Q 500 180 700 250" fill="none" stroke="#FFF" stroke-width="8" stroke-opacity="0.15" stroke-linecap="round" />`);
 
-    // Nose (Heart shape or soft rounding)
-    const nosePath = `M 500 570 C 530 560 550 580 500 610 C 450 580 470 560 500 570 Z`;
-    svg.add(`<path d="${nosePath}" fill="${pal.eye}" />`);
-    svg.add(`<ellipse cx="490" cy="575" rx="10" ry="5" fill="#FFF" fill-opacity="0.6" />`); // Nose Shine
+    // 3. Face Features - SNOUT
+    const snoutY = 600;
+    // Snout gradient
+    const snoutId = `snout-${index}`;
+    svg.addDef(`<radialGradient id="${snoutId}" cx="50%" cy="40%" r="50%">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.4" />
+        <stop offset="80%" stop-color="${pal.accent}" stop-opacity="0.1" />
+        <stop offset="100%" stop-color="${pal.fur}" stop-opacity="0" />
+    </radialGradient>`);
+
+    svg.add(`<ellipse cx="500" cy="${snoutY}" rx="160" ry="120" fill="url(#${snoutId})" />`);
+
+    // Nose (Soft rounded triangle)
+    svg.add(`<path d="M 450 560 C 450 540 550 540 550 560 L 530 600 C 530 620 470 620 470 600 Z" fill="${pal.eye}" />`);
+    // Nose Highlight
+    svg.add(`<ellipse cx="480" cy="565" rx="15" ry="8" fill="#FFF" fill-opacity="0.5" />`);
 
     // Mouth
-    svg.add(`<path d="M 500 610 L 500 650" stroke="${pal.eye}" stroke-width="8" stroke-linecap="round" />`);
-    svg.add(`<path d="M 450 650 Q 500 690 550 650" stroke="${pal.eye}" stroke-width="8" fill="none" stroke-linecap="round" />`);
+    const mouthType = pick(['Smile', 'Tiny', 'Grin']);
+    if (mouthType === 'Smile') {
+        svg.add(`<path d="M 500 610 L 500 640" stroke="${pal.eye}" stroke-width="6" stroke-linecap="round" />`);
+        svg.add(`<path d="M 460 640 Q 500 680 540 640" fill="none" stroke="${pal.eye}" stroke-width="6" stroke-linecap="round" />`);
+    } else if (mouthType === 'Tiny') {
+        svg.add(`<path d="M 490 630 Q 500 640 510 630" fill="none" stroke="${pal.eye}" stroke-width="6" stroke-linecap="round" />`);
+    } else {
+        svg.add(`<path d="M 460 630 Q 500 680 540 630 Z" fill="#4E342E" stroke="${pal.eye}" stroke-width="4" />`);
+        // Tongue
+        svg.add(`<path d="M 480 660 Q 500 670 520 660" fill="none" stroke="#FF8A80" stroke-width="8" stroke-linecap="round" />`);
+    }
 
-    // Eyes (Premium)
-    const drawEye = (cx, cy) => {
-        // Shadow/Socket
-        svg.add(`<circle cx="${cx}" cy="${cy}" r="55" fill="#000" fill-opacity="0.1" />`);
-        // Sclera
-        svg.add(`<circle cx="${cx}" cy="${cy}" r="50" fill="#FFF" />`);
-        // Iris/Pupil
-        svg.add(`<circle cx="${cx}" cy="${cy}" r="35" fill="${pal.eye}" />`);
-        // Highlights (Kawaii sparkle)
-        svg.add(`<circle cx="${cx - 12}" cy="${cy - 12}" r="12" fill="#FFF" />`);
-        svg.add(`<circle cx="${cx + 15}" cy="${cy + 10}" r="6" fill="#FFF" fill-opacity="0.7" />`);
+    // 4. Eyes (Ultra Premium)
+    // Complex construction
+    const drawPremiumEye = (cx, cy) => {
+        // Deep Socket Shadow (Ambient Occlusion)
+        svg.add(`<ellipse cx="${cx}" cy="${cy}" rx="60" ry="65" fill="#000" fill-opacity="0.1" filter="blur(2px)" />`);
+
+        // Sclera (White base)
+        svg.add(`<ellipse cx="${cx}" cy="${cy}" rx="55" ry="60" fill="#FFF" />`);
+
+        // Iris Gradient
+        const irisId = `iris-${cx}`;
+        svg.addDef(`<radialGradient id="${irisId}" cx="30%" cy="30%" r="80%">
+            <stop offset="0%" stop-color="${pal.eye}" /> <!-- Lighter center part of iris -->
+            <stop offset="80%" stop-color="#000" /> <!-- Dark outer rim -->
+        </radialGradient>`);
+
+        // Iris
+        svg.add(`<circle cx="${cx}" cy="${cy}" r="45" fill="url(#${irisId})" />`);
+
+        // Pupil (Large for cute factor)
+        svg.add(`<circle cx="${cx}" cy="${cy}" r="25" fill="#000" />`);
+
+        // Primary Highlight (Top Left - Window Reflection)
+        svg.add(`<ellipse cx="${cx - 20}" cy="${cy - 20}" rx="12" ry="8" transform="rotate(-45 ${cx - 20} ${cy - 20})" fill="#FFF" fill-opacity="0.9" />`);
+
+        // Secondary Highlight (Bottom Right - Bounce Light)
+        svg.add(`<circle cx="${cx + 20}" cy="${cy + 20}" r="5" fill="#FFF" fill-opacity="0.6" />`);
+
+        // Eyelash / Eyelid shadow top
+        svg.add(`<path d="M ${cx - 50} ${cy - 20} Q ${cx} ${cy - 60} ${cx + 50} ${cy - 20}" fill="none" stroke="${pal.eye}" stroke-width="4" stroke-opacity="0.5" />`);
     };
 
-    drawEye(380, 500);
-    drawEye(620, 500);
+    drawPremiumEye(360, 480);
+    drawPremiumEye(640, 480);
 
-    // Cheeks (Blush)
-    svg.add(`<ellipse cx="320" cy="600" rx="40" ry="25" fill="#FF8A80" fill-opacity="0.4" />`);
-    svg.add(`<ellipse cx="680" cy="600" rx="40" ry="25" fill="#FF8A80" fill-opacity="0.4" />`);
+    // Cheeks (Blush with gradient)
+    const blushId = `blush-${index}`;
+    svg.addDef(`<radialGradient id="${blushId}">
+        <stop offset="0%" stop-color="#FF5252" stop-opacity="0.4" />
+        <stop offset="100%" stop-color="#FF5252" stop-opacity="0" />
+    </radialGradient>`);
+    svg.add(`<circle cx="300" cy="620" r="70" fill="url(#${blushId})" />`);
+    svg.add(`<circle cx="700" cy="620" r="70" fill="url(#${blushId})" />`);
 
-    // 5. Clothing / Accessories
-    const clothing = pick(['None', 'Bowtie', 'Bandana', 'Scarf']);
-    traits.Clothing = clothing;
+    // 5. Accessories
+    if (Math.random() > 0.5) {
+        const acc = pick(['Glasses', 'Halo', 'Bowtie']);
+        traits.Accessory = acc;
 
-    if (clothing === 'Bowtie') {
-        const tieColor = pal.accent === pal.bg[1] ? '#FFF' : pal.bg[0]; // Contrast
-        svg.add(`<path d="M 500 780 L 420 720 L 420 840 Z" fill="${tieColor}" stroke="#000" stroke-width="2" stroke-opacity="0.1" />`);
-        svg.add(`<path d="M 500 780 L 580 720 L 580 840 Z" fill="${tieColor}" stroke="#000" stroke-width="2" stroke-opacity="0.1" />`);
-        svg.add(`<circle cx="500" cy="780" r="30" fill="${tieColor}" stroke="#000" stroke-width="2" stroke-opacity="0.1" />`);
-    } else if (clothing === 'Bandana') {
-        const bandColor = pal.eye;
-        // Simple triangular shape
-        svg.add(`<path d="M 350 750 Q 500 900 650 750 L 500 850 Z" fill="${bandColor}" />`);
+        if (acc === 'Glasses') {
+            // Chic round glasses
+            svg.add(`<circle cx="360" cy="480" r="70" fill="#000" fill-opacity="0.1" stroke="#FFD700" stroke-width="8" />`);
+            svg.add(`<circle cx="640" cy="480" r="70" fill="#000" fill-opacity="0.1" stroke="#FFD700" stroke-width="8" />`);
+            // Bridge
+            svg.add(`<line x1="430" y1="480" x2="570" y2="480" stroke="#FFD700" stroke-width="8" />`);
+            // Shine on glass
+            svg.add(`<path d="M 330 460 L 390 500" stroke="#FFF" stroke-width="3" stroke-opacity="0.3" />`);
+            svg.add(`<path d="M 610 460 L 670 500" stroke="#FFF" stroke-width="3" stroke-opacity="0.3" />`);
+        } else if (acc === 'Halo') {
+            // Glowing Halo
+            svg.add(`<ellipse cx="500" cy="150" rx="150" ry="30" fill="none" stroke="#FFD700" stroke-width="12" filter="blur(2px)" />`);
+            svg.add(`<ellipse cx="500" cy="150" rx="150" ry="30" fill="none" stroke="#FFF" stroke-width="4" />`);
+        } else if (acc === 'Bowtie') {
+            // Premium Silk Bowtie
+            const tieGradientId = `tie-${index}`;
+            svg.addDef(`<linearGradient id="${tieGradientId}" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="${pal.accent}" />
+                <stop offset="100%" stop-color="${pal.eye}" /> 
+            </linearGradient>`);
+
+            svg.add(`<path d="M 500 800 L 400 750 C 380 740 380 860 400 850 L 500 800 Z" fill="url(#${tieGradientId})" />`);
+            svg.add(`<path d="M 500 800 L 600 750 C 620 740 620 860 600 850 L 500 800 Z" fill="url(#${tieGradientId})" />`);
+            svg.add(`<circle cx="500" cy="800" r="25" fill="${pal.eye}" />`);
+        }
     }
 
     return { svg: svg.toXML(), traits };
 }
 
 async function main() {
-    console.log(`Generating ${editionSize} PREMIUM SVG Bears...`);
+    console.log(`Generating ${editionSize} ULTRA-PREMIUM SVG Bears...`);
     ensureDir(imagesDir);
     ensureDir(metadataDir);
 
@@ -204,8 +270,8 @@ async function main() {
 
         fs.writeFileSync(path.join(imagesDir, `${i}.svg`), svg);
         const metadata = {
-            name: `Premium Bear #${i}`,
-            description: "A premium vector art bear.",
+            name: `Ultra-Premium Bear #${i}`,
+            description: "An ultra-premium vector art bear with advanced texturing.",
             image: `${i}.svg`,
             attributes: Object.entries(traits).map(([k, v]) => ({ trait_type: k, value: v }))
         };
@@ -214,7 +280,7 @@ async function main() {
         if (i % 10 === 0) process.stdout.write('.');
     }
 
-    console.log(`\nDONE. Generated ${editionSize} Premium SVGs in ${outputDir}`);
+    console.log(`\nDONE. Generated ${editionSize} Ultra-Premium SVGs in ${outputDir}`);
 }
 
 main().catch(console.error);
