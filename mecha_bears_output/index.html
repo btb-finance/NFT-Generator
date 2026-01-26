@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Isometric Mecha-Bears Gallery</title>
+    <style>
+        body {
+            background: #0a0a0a;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            border-bottom: 2px solid #00ff00;
+            display: inline-block;
+            padding-bottom: 10px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: #111;
+            border: 1px solid #333;
+            padding: 10px;
+            transition: all 0.2s;
+        }
+
+        .card:hover {
+            border-color: #00ff00;
+            box-shadow: 0 0 15px rgba(0, 255, 0, 0.2);
+            transform: scale(1.02);
+        }
+
+        img {
+            width: 100%;
+            aspect-ratio: 1/1;
+            background: #000;
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        h3 {
+            font-size: 14px;
+            margin: 10px 0 0;
+            color: #fff;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>ISOMETRIC MECHA DEPLOYMENT</h1>
+    <div class="grid">
+        <script>
+            for (let i = 1; i <= 100; i++) {
+                document.write(`
+            <div class="card">
+                <img src="images/${i}.svg" loading="lazy" alt="Unit #${i}" />
+                <h3>UNIT #${i}</h3>
+            </div>
+        `);
+            }
+        </script>
+    </div>
+</body>
+
+</html>
