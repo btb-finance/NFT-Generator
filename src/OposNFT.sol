@@ -17,6 +17,7 @@ interface IOposRenderer {
 interface IRewardDistributorView {
     function pending(uint256 tokenId) external view returns (uint256);
     function lifetimeEarned(uint256 tokenId) external view returns (uint256);
+    function asleep(uint256 tokenId) external view returns (bool);
 }
 
 interface IRewardDistributorMint {
@@ -203,13 +204,16 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     function _getYieldAttributes(uint256 tokenId) private view returns (string memory) {
         uint256 claimable;
         uint256 lifetime;
+        string memory status = "Active";
         IRewardDistributorView dist = distributor;
         if (address(dist) != address(0)) {
             // Strip 18 decimals — display whole OPOS units only.
             claimable = dist.pending(tokenId) / 1e18;
             lifetime = dist.lifetimeEarned(tokenId) / 1e18;
+            if (dist.asleep(tokenId)) status = "Asleep";
         }
         return string(abi.encodePacked(
+            '{"trait_type":"Status","value":"', status, '"},',
             '{"display_type":"number","trait_type":"Claimable OPOS","value":', claimable.toString(), '},',
             '{"display_type":"number","trait_type":"Lifetime OPOS","value":', lifetime.toString(), '}'
         ));
