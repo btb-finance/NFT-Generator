@@ -158,6 +158,104 @@ contract SyncMathTest is TestBase {
         return nft.ownerOf(id);
     }
 
+    /// @notice "A fee arrives just before I claim — do I miss it?" — No.
+    ///         The claim path calls `_sync()` first, which rolls in ALL drifts
+    ///         (including fees that arrived in the same block, in earlier txs).
+    ///         The user's payout includes the just-arrived share.
+    function test_fee_just_before_claim_is_included() public {
+        uint256[] memory ids = _buyAs(actors[0], 1);
+
+        // Round 1: 100 OPOS, sync. NFT has 20 OPOS pending (sole NFT in its tier).
+        _arriveFee(100 ether);
+        distributor.sync();
+        assertEq(distributor.pending(ids[0]), 20 ether, "20 already pending");
+        assertEq(distributor.lastBalance(), 100 ether, "lastBalance synced");
+
+        // Round 2: 1 OPOS arrives. NO explicit sync — we're testing that claim
+        // catches it.
+        _arriveFee(1 ether);
+        assertEq(opos.balanceOf(address(distributor)), 101 ether, "balance grew");
+        assertEq(distributor.lastBalance(), 100 ether, "lastBalance NOT yet updated");
+
+        // Even before sync, the view picks up the new fee via projection.
+        // 1 OPOS × 20% / 1 NFT = 0.2 added → 20.2 total.
+        assertEq(distributor.pending(ids[0]), 20.2 ether, "view sees the new fee");
+
+        // ─ Claim ─
+        uint256 before = opos.balanceOf(actors[0]);
+        vm.prank(actors[0]);
+        nft.claim(ids[0]);
+        uint256 paid = opos.balanceOf(actors[0]) - before;
+
+        assertEq(paid, 20.2 ether, "got both old (20) AND new (0.2)");
+
+        // After claim, lastBalance reflects the new total minus payout.
+        // 100 + 1 − 20.2 = 80.8
+        assertEq(distributor.lastBalance(), 80.8 ether, "lastBalance synced post-claim");
+        assertEq(opos.balanceOf(address(distributor)), 80.8 ether, "actual balance matches");
+
+        // The 0.8 remaining represents the 4 other tiers' 20% shares of the 1 OPOS
+        // that banked in tierPending (no NFTs in those tiers).
+        assertEq(_sumTierPending(), 80 ether + 0.8 ether, "other tiers still hold their cut");
+    }
+
+    /// @notice The "balance returns to the same number" worry: claim drops the
+    ///         balance, then a new fee restores it to the original number. A
+    ///         naive implementation would think nothing happened. We don't
+    ///         implement it that way — `lastBalance` is decremented during the
+    ///         claim, so the new fee is still correctly seen as new.
+    function test_balance_returns_to_same_number_still_detects_new_fee() public {
+        uint256[] memory ids = _buyAs(actors[0], 1);
+
+        // Round 1: 100 OPOS arrives. After sync, NFT has 20 OPOS pending
+        // (it's the only one in its tier, so it gets the full tier share).
+        _arriveFee(100 ether);
+        distributor.sync();
+        uint256 distBalanceA = opos.balanceOf(address(distributor));
+        uint256 lastBalanceA = distributor.lastBalance();
+        assertEq(distBalanceA, 100 ether, "step A: 100 in contract");
+        assertEq(lastBalanceA, 100 ether, "step A: lastBalance = 100");
+        assertEq(distributor.pending(ids[0]), 20 ether, "step A: 20 pending (sole NFT in tier)");
+
+        // ─ NFT owner claims 20 OPOS ─
+        vm.prank(actors[0]);
+        nft.claim(ids[0]);
+        uint256 distBalanceB = opos.balanceOf(address(distributor));
+        uint256 lastBalanceB = distributor.lastBalance();
+        assertEq(distBalanceB, 80 ether, "step B: 80 in contract");
+        assertEq(lastBalanceB, 80 ether, "step B: lastBalance = 80 (decremented in claim)");
+        assertEq(distributor.pending(ids[0]), 0, "step B: pending zeroed");
+
+        // ─ Now a new 20 OPOS fee arrives — balance goes from 80 back to 100 ─
+        _arriveFee(20 ether);
+        uint256 distBalanceC = opos.balanceOf(address(distributor));
+        uint256 lastBalanceC = distributor.lastBalance();
+        assertEq(distBalanceC, 100 ether, "step C: balance is 100 again (same as step A!)");
+        assertEq(lastBalanceC, 80 ether, "step C: lastBalance still 80 (no sync yet)");
+
+        // Even though balance == 100 (same number as step A), the contract
+        // sees the diff = 100 - 80 = 20, NOT zero. The new fee is correctly
+        // recognized as new because lastBalance is the source of truth, not
+        // the absolute balance number.
+        uint256 expectedNewPending = (20 ether * 2000) / 10000; // 20% of new fee, 1 NFT in tier
+        assertEq(distributor.pending(ids[0]), expectedNewPending, "step C: new fee detected");
+
+        // Claim the new fee.
+        vm.prank(actors[0]);
+        nft.claim(ids[0]);
+        uint256 distBalanceD = opos.balanceOf(address(distributor));
+        uint256 lastBalanceD = distributor.lastBalance();
+        assertEq(distBalanceD, 96 ether, "step D: 100 - 4 = 96");
+        assertEq(lastBalanceD, 96 ether, "step D: lastBalance synced");
+
+        // Conservation: total received = lifetimeClaimed + balance.
+        assertEq(
+            distributor.lifetimeClaimed(ids[0]) + distBalanceD,
+            120 ether,
+            "received 100 + 20 = 120"
+        );
+    }
+
     /// @notice The user's exact scenario: many NFTs in a tier, one claims first,
     ///         then a new fee arrives. The NFT that already claimed must still
     ///         receive its proportional share of the NEW fee — same as everyone
