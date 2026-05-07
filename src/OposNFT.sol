@@ -24,6 +24,15 @@ interface IRewardDistributorMint {
     function onMintBatch(uint256[] calldata tokenIds) external;
 }
 
+interface IRewardDistributorClaim {
+    function claimFor(address user, uint256 tokenId) external;
+    function claimManyFor(address user, uint256[] calldata tokenIds) external;
+    function wakeFor(address user, uint256 tokenId) external;
+    function asleep(uint256 tokenId) external view returns (bool);
+    function isReapable(uint256 tokenId) external view returns (bool);
+    function secondsUntilStale(uint256 tokenId) external view returns (uint256);
+}
+
 /**
  * @title OposNFT
  * @dev OPOSSUM-ecosystem NFT collection. Fully on-chain SVG art via OposRenderer,
@@ -70,6 +79,54 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
         distributor = IRewardDistributorView(_distributor);
         emit DistributorUpdated(old, _distributor);
         emit BatchMetadataUpdate(1, MAX_SUPPLY);
+    }
+
+    // ───────────── Reward facade — call these instead of the distributor ─────────────
+    // Holders who only know the NFT contract can claim, wake, and read their
+    // pending rewards through these functions. Each one forwards to the
+    // distributor with `msg.sender` as the user, so the user is the one
+    // verified as owner and the one receiving the OPOS.
+
+    /// @notice Claim OPOS rewards for one tokenId. Owner-only.
+    function claim(uint256 tokenId) external {
+        _requireDistributor().claimFor(msg.sender, tokenId);
+    }
+
+    /// @notice Claim OPOS rewards for many tokenIds in one tx. Owner-only.
+    function claimMany(uint256[] calldata tokenIds) external {
+        _requireDistributor().claimManyFor(msg.sender, tokenIds);
+    }
+
+    /// @notice Wake a previously-reaped NFT so it earns again. Owner-only.
+    function wake(uint256 tokenId) external {
+        _requireDistributor().wakeFor(msg.sender, tokenId);
+    }
+
+    /// @notice Pending OPOS reward (in wei) for `tokenId`. 0 if asleep.
+    function pendingReward(uint256 tokenId) external view returns (uint256) {
+        IRewardDistributorView dist = distributor;
+        if (address(dist) == address(0)) return 0;
+        return dist.pending(tokenId);
+    }
+
+    /// @notice Lifetime OPOS earned (claimed + currently pending) for `tokenId`.
+    function lifetimeReward(uint256 tokenId) external view returns (uint256) {
+        IRewardDistributorView dist = distributor;
+        if (address(dist) == address(0)) return 0;
+        return dist.lifetimeEarned(tokenId);
+    }
+
+    /// @notice True if this NFT has been reaped and is currently dormant.
+    function isAsleep(uint256 tokenId) external view returns (bool) {
+        IRewardDistributorView dist = distributor;
+        if (address(dist) == address(0)) return false;
+        return dist.asleep(tokenId);
+    }
+
+    function _requireDistributor() private view returns (IRewardDistributorClaim) {
+        address dist = address(distributor);
+        require(dist != address(0), "Distributor not set");
+        return IRewardDistributorClaim(dist);
     }
 
     /// @dev Distributor-only proxy so it can signal a single-token metadata refresh.

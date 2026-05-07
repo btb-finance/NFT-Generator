@@ -150,7 +150,30 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice Claim a single tokenId's pending reward. Caller must own the NFT
     ///         and the NFT must be awake.
     function claim(uint256 tokenId) external nonReentrant {
-        if (NFT.ownerOf(tokenId) != msg.sender) revert NotNFTOwner();
+        _claim(msg.sender, tokenId);
+    }
+
+    /// @notice NFT-contract-only facade so users can claim via `nft.claim()`
+    ///         without knowing the distributor address. The NFT vouches for
+    ///         the user; we still verify they own the NFT.
+    function claimFor(address user, uint256 tokenId) external nonReentrant {
+        if (msg.sender != address(NFT)) revert NotNFT();
+        _claim(user, tokenId);
+    }
+
+    /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep.
+    function claimMany(uint256[] calldata tokenIds) external nonReentrant {
+        _claimMany(msg.sender, tokenIds);
+    }
+
+    /// @notice NFT-contract-only facade for batch claim.
+    function claimManyFor(address user, uint256[] calldata tokenIds) external nonReentrant {
+        if (msg.sender != address(NFT)) revert NotNFT();
+        _claimMany(user, tokenIds);
+    }
+
+    function _claim(address user, uint256 tokenId) internal {
+        if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (asleep[tokenId]) revert NFTAsleep();
         _sync();
         uint8 tier = NFT.tierIndexOf(tokenId);
@@ -160,20 +183,19 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (owed > 0) {
             lifetimeClaimed[tokenId] += owed;
             lastBalance -= owed;
-            REWARD_TOKEN.safeTransfer(msg.sender, owed);
+            REWARD_TOKEN.safeTransfer(user, owed);
             _tryEmitMetadataUpdate(tokenId);
-            emit Claimed(msg.sender, tokenId, owed);
+            emit Claimed(user, tokenId, owed);
         }
     }
 
-    /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep.
-    function claimMany(uint256[] calldata tokenIds) external nonReentrant {
+    function _claimMany(address user, uint256[] calldata tokenIds) internal {
         _sync();
         uint256 total;
         uint256 len = tokenIds.length;
         for (uint256 i; i < len; ++i) {
             uint256 id = tokenIds[i];
-            if (NFT.ownerOf(id) != msg.sender) revert NotNFTOwner();
+            if (NFT.ownerOf(id) != user) revert NotNFTOwner();
             if (asleep[id]) revert NFTAsleep();
             uint8 tier = NFT.tierIndexOf(id);
             uint256 owed = (accRewardPerSlot[tier] - lastIndex[id]) / ACC_PRECISION;
@@ -182,12 +204,12 @@ contract NFTRewardDistributor is ReentrancyGuard {
             if (owed > 0) {
                 lifetimeClaimed[id] += owed;
                 total += owed;
-                emit Claimed(msg.sender, id, owed);
+                emit Claimed(user, id, owed);
             }
         }
         if (total > 0) {
             lastBalance -= total;
-            REWARD_TOKEN.safeTransfer(msg.sender, total);
+            REWARD_TOKEN.safeTransfer(user, total);
             _tryEmitBatchMetadataUpdate();
         }
     }
@@ -228,22 +250,28 @@ contract NFTRewardDistributor is ReentrancyGuard {
     ///         starts earning again from the moment it's woken — it does NOT
     ///         retroactively claim rewards that grew during its sleep.
     function wake(uint256 tokenId) external nonReentrant {
-        if (NFT.ownerOf(tokenId) != msg.sender) revert NotNFTOwner();
+        _wake(msg.sender, tokenId);
+    }
+
+    /// @notice NFT-contract-only facade so users can wake via `nft.wake()`.
+    function wakeFor(address user, uint256 tokenId) external nonReentrant {
+        if (msg.sender != address(NFT)) revert NotNFT();
+        _wake(user, tokenId);
+    }
+
+    function _wake(address user, uint256 tokenId) internal {
+        if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (!asleep[tokenId]) revert NotAsleep();
         _sync();
 
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 prevActive = activeInTier[tier];
 
-        // Snapshot lastIndex to current accRewardPerSlot so this NFT only earns
-        // from now forward — it does NOT claim the during-sleep growth.
         lastIndex[tokenId] = accRewardPerSlot[tier];
         asleep[tokenId] = false;
         unchecked { activeInTier[tier] = prevActive + 1; }
         lastActivityAt[tokenId] = block.timestamp;
 
-        // If this is the only active NFT in the tier and there's pending share
-        // (because the tier was empty), release the backlog to this owner.
         if (prevActive == 0 && tierPending[tier] > 0) {
             accRewardPerSlot[tier] += (tierPending[tier] * ACC_PRECISION) / 1;
             emit PendingReleased(tier, tierPending[tier]);
@@ -251,7 +279,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         }
 
         _tryEmitMetadataUpdate(tokenId);
-        emit Woke(msg.sender, tokenId);
+        emit Woke(user, tokenId);
     }
 
     // ─────────────────────────── mint hook ───────────────────────────
