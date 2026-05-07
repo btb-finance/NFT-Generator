@@ -310,10 +310,24 @@ function metadataObject(tokenId, seed) {
       { trait_type: "Accessory",  value: ACCESSORIES[t.accessoryIdx] },
       { trait_type: "Background", value: BG_NAMES[t.bgIdx] },
       { trait_type: "Status",     value: "Active" },
-      { display_type: "number", trait_type: "Claimable OPOS", value: 0 },
-      { display_type: "number", trait_type: "Lifetime OPOS",  value: 0 }
+      { trait_type: "Claimable OPOS", value: formatAmount(0) },
+      { trait_type: "Lifetime OPOS",  value: formatAmount(0) }
     ]
   };
+}
+
+function formatAmount(n) {
+  // Format a whole-token amount with K/M/B suffix (one decimal, trim ".0")
+  if (n >= 1_000_000_000) return decimalPart(n, 1_000_000_000) + "B";
+  if (n >= 1_000_000)     return decimalPart(n, 1_000_000)     + "M";
+  if (n >= 1_000)         return decimalPart(n, 1_000)         + "K";
+  return String(n);
+}
+function decimalPart(n, unit) {
+  const integerPart = Math.floor(n / unit);
+  const oneDecimal = Math.floor((n % unit) / (unit / 10));
+  if (oneDecimal === 0) return String(integerPart);
+  return integerPart + "." + oneDecimal;
 }
 
 function makeCard(tokenId, seed) {

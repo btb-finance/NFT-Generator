@@ -113,6 +113,30 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     }
 
     /**
+     * @dev Gift one NFT to each address in `recipients`. Owner-only.
+     *      Use case: airdrops, giveaways, whitelist rewards.
+     *      Mints are still random — each recipient gets a fresh random NFT.
+     * @param recipients Up to 500 addresses; each receives exactly one NFT.
+     */
+    function giftNFT(address[] calldata recipients) external onlyOwner {
+        uint256 len = recipients.length;
+        require(len > 0 && len <= 500, "Recipients must be 1-500");
+        require(_tokenIdCounter + len <= MAX_SUPPLY, "Exceeds max supply");
+
+        uint256[] memory ids = new uint256[](len);
+        for (uint256 i = 0; i < len; i++) {
+            address to = recipients[i];
+            require(to != address(0), "Zero recipient");
+            uint256 tokenId = _tokenIdCounter++;
+            uint256 traits = _generateTraits(tokenId);
+            tokenTraits[tokenId] = traits;
+            ids[i] = tokenId;
+            _safeMint(to, tokenId);
+        }
+        _notifyDistributor(ids);
+    }
+
+    /**
      * @dev Public buy function - Users buy NFTs with ETH
      * @param amount Number of NFTs to buy (max 500 per transaction)
      */
@@ -202,21 +226,40 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      *      attribute shape stays stable across the contract's lifetime.
      */
     function _getYieldAttributes(uint256 tokenId) private view returns (string memory) {
-        uint256 claimable;
-        uint256 lifetime;
+        uint256 claimableWhole;
+        uint256 lifetimeWhole;
         string memory status = "Active";
         IRewardDistributorView dist = distributor;
         if (address(dist) != address(0)) {
-            // Strip 18 decimals — display whole OPOS units only.
-            claimable = dist.pending(tokenId) / 1e18;
-            lifetime = dist.lifetimeEarned(tokenId) / 1e18;
+            claimableWhole = dist.pending(tokenId) / 1e18;
+            lifetimeWhole = dist.lifetimeEarned(tokenId) / 1e18;
             if (dist.asleep(tokenId)) status = "Asleep";
         }
         return string(abi.encodePacked(
             '{"trait_type":"Status","value":"', status, '"},',
-            '{"display_type":"number","trait_type":"Claimable OPOS","value":', claimable.toString(), '},',
-            '{"display_type":"number","trait_type":"Lifetime OPOS","value":', lifetime.toString(), '}'
+            '{"trait_type":"Claimable OPOS","value":"', _formatAmount(claimableWhole), '"},',
+            '{"trait_type":"Lifetime OPOS","value":"', _formatAmount(lifetimeWhole), '"}'
         ));
+    }
+
+    /**
+     * @dev Format a whole-token amount with K/M/B suffix to one decimal place.
+     *      Examples: 0 → "0", 950 → "950", 1_500 → "1.5K",
+     *                1_100_000 → "1.1M", 2_500_000_000 → "2.5B".
+     *      Trims a trailing ".0" so "1.0M" displays as "1M".
+     */
+    function _formatAmount(uint256 n) private pure returns (string memory) {
+        if (n >= 1_000_000_000) return string(abi.encodePacked(_decimalPart(n, 1_000_000_000), "B"));
+        if (n >= 1_000_000)     return string(abi.encodePacked(_decimalPart(n, 1_000_000),     "M"));
+        if (n >= 1_000)         return string(abi.encodePacked(_decimalPart(n, 1_000),         "K"));
+        return n.toString();
+    }
+
+    function _decimalPart(uint256 n, uint256 unit) private pure returns (string memory) {
+        uint256 integerPart = n / unit;
+        uint256 oneDecimal = (n % unit) / (unit / 10);
+        if (oneDecimal == 0) return integerPart.toString();
+        return string(abi.encodePacked(integerPart.toString(), ".", oneDecimal.toString()));
     }
 
     function _getAttributes(uint256 seed) private view returns (string memory) {
