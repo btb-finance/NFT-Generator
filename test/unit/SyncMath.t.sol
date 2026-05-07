@@ -157,4 +157,72 @@ contract SyncMathTest is TestBase {
     function ownerOfTry(uint256 id) external view returns (address) {
         return nft.ownerOf(id);
     }
+
+    /// @notice The user's exact scenario: many NFTs in a tier, one claims first,
+    ///         then a new fee arrives. The NFT that already claimed must still
+    ///         receive its proportional share of the NEW fee — same as everyone
+    ///         else in the tier. Other NFTs hold (old + new). No double counting.
+    function test_already_claimed_nft_still_gets_share_of_new_fees() public {
+        // Mint 200 NFTs so we're statistically guaranteed several tiers populated.
+        // We'll pick the first tier with ≥ 2 NFTs and run the scenario there.
+        uint256[] memory ids = _adminMintAs(200);
+
+        // Round 1: 10,000 OPOS arrives. Trigger sync via a no-op.
+        _arriveFee(10_000 ether);
+        distributor.sync();
+
+        // Find any tier with ≥ 2 NFTs.
+        uint8 testTier = 255;
+        uint256 idA;
+        uint256 idB;
+        for (uint8 t = 0; t < 5; ++t) {
+            if (distributor.activeInTier(t) >= 2) {
+                testTier = t;
+                break;
+            }
+        }
+        assertLt(testTier, 5, "need a populated tier");
+        // Find two ids in that tier.
+        uint256 found;
+        for (uint256 i = 0; i < ids.length && found < 2; ++i) {
+            if (nft.tierIndexOf(ids[i]) == testTier) {
+                if (found == 0) idA = ids[i]; else idB = ids[i];
+                found++;
+            }
+        }
+
+        uint256 nInTier = distributor.activeInTier(testTier);
+
+        // Round 1 share per NFT in this tier:
+        //   tierShare = 10,000 * 20% = 2000
+        //   perNft   = 2000 / nInTier
+        uint256 perNftRound1 = (2000 ether) / nInTier;
+        // (Pending may have a few wei rounding; assert approx equal.)
+        assertApproxEqAbs(distributor.pending(idA), perNftRound1, nInTier, "round 1 idA");
+        assertApproxEqAbs(distributor.pending(idB), perNftRound1, nInTier, "round 1 idB");
+
+        // ── NFT idA claims. Their pending goes to 0. idB still holds round-1 share. ──
+        vm.prank(nft.ownerOf(idA));
+        nft.claim(idA); // facade
+        assertEq(distributor.pending(idA), 0, "idA pending zeroed after claim");
+        assertApproxEqAbs(distributor.pending(idB), perNftRound1, nInTier, "idB unaffected");
+
+        // ── Round 2: 100 OPOS arrives. ──
+        _arriveFee(100 ether);
+        distributor.sync();
+
+        // Per-NFT share of the new 100 OPOS:
+        //   tierShare = 100 * 20% = 20
+        //   perNft   = 20 / nInTier
+        uint256 perNftRound2 = (20 ether) / nInTier;
+
+        // idA (who already claimed) gets exactly the new share — nothing more.
+        assertApproxEqAbs(distributor.pending(idA), perNftRound2, nInTier, "idA gets new share only");
+
+        // idB has (old + new): the round-1 share they never claimed, plus the round-2 share.
+        assertApproxEqAbs(distributor.pending(idB), perNftRound1 + perNftRound2, nInTier, "idB has old + new");
+
+        // The previously-claimed NFT is NOT excluded from new fees — it still earns
+        // alongside everyone else. That's the property the user asked us to verify.
+    }
 }
