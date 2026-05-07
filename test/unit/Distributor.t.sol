@@ -240,4 +240,67 @@ contract DistributorTest is TestBase {
         vm.expectRevert(NFTRewardDistributor.NotStaleYet.selector);
         distributor.reap(ids[0]);
     }
+
+    // ─────────────────────────── A3 — reap own NFT ────────────────────────────────
+
+    function test_A3_reap_own_nft() public {
+        uint256[] memory ids = _buyAs(actors[0], 1);
+        _arriveFee(1000 ether);
+        vm.warp(block.timestamp + 100 days);
+
+        // Owner reaps their own — allowed; they get the rewards but NFT goes to sleep.
+        uint256 before = opos.balanceOf(actors[0]);
+        vm.prank(actors[0]);
+        distributor.reap(ids[0]);
+
+        assertEq(opos.balanceOf(actors[0]) - before, 200 ether, "owner-reaper got payout");
+        assertTrue(distributor.asleep(ids[0]), "still asleep");
+    }
+
+    // ─────────────────────────── A7 — sandwiched fee + claim ──────────────────────
+
+    function test_A7_repeated_claims_split_correctly() public {
+        uint256[] memory ids = _buyAs(actors[0], 1);
+
+        _arriveFee(1000 ether);
+        vm.prank(actors[0]);
+        distributor.claim(ids[0]); // gets 200 (this tier's 20%)
+
+        _arriveFee(2000 ether);
+        vm.prank(actors[0]);
+        distributor.claim(ids[0]); // gets 400 (20% of new 2000)
+
+        _arriveFee(500 ether);
+        vm.prank(actors[0]);
+        distributor.claim(ids[0]); // gets 100
+
+        // Total claimed = 200 + 400 + 100 = 700 (20% of 3500 total).
+        assertEq(distributor.lifetimeClaimed(ids[0]), 700 ether, "lifetime sums correctly");
+    }
+
+    // ─────────────────────────── A10 — all NFTs in tier reaped ────────────────────
+
+    function test_A10_all_reaped_then_wake_inherits_backlog() public {
+        // Mint 1 NFT → record its tier → reap → fees flow → wake → inherits.
+        uint256[] memory ids = _buyAs(actors[0], 1);
+        uint8 tier = nft.tierIndexOf(ids[0]);
+
+        // Sleep the only NFT in its tier.
+        vm.warp(block.timestamp + 100 days);
+        vm.prank(actors[1]);
+        distributor.reap(ids[0]);
+        assertEq(distributor.activeInTier(tier), 0, "tier emptied");
+
+        // Fees flow during empty-tier — bank to tierPending.
+        _arriveFee(5000 ether);
+        distributor.sync();
+        assertEq(distributor.tierPending(tier), 1000 ether, "tier banked 20%");
+
+        // Owner wakes — inherits the entire tier backlog.
+        vm.prank(actors[0]);
+        distributor.wake(ids[0]);
+
+        assertEq(distributor.tierPending(tier), 0, "released");
+        assertEq(distributor.pending(ids[0]), 1000 ether, "windfall = entire backlog");
+    }
 }

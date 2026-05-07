@@ -221,4 +221,86 @@ contract OposNFTTest is TestBase {
         vm.expectRevert(bytes("Recipients must be 1-500"));
         nft.giftNFT(recipients);
     }
+
+    // ─────────────────────────── N6 — royalty (ERC2981) ───────────────────────────
+
+    function test_N6_default_royalty_5_percent() public {
+        uint256[] memory ids = _adminMintAs(1);
+        (address receiver, uint256 royaltyAmount) = nft.royaltyInfo(ids[0], 1 ether);
+        assertEq(receiver, owner, "royalty goes to owner by default");
+        assertEq(royaltyAmount, 0.05 ether, "5% royalty");
+    }
+
+    function test_N6_royalty_owner_can_update() public {
+        uint256[] memory ids = _adminMintAs(1);
+        address newReceiver = actors[2];
+        uint96 newBps = 1000; // 10%
+
+        vm.prank(owner);
+        nft.setDefaultRoyalty(newReceiver, newBps);
+
+        (address receiver, uint256 royaltyAmount) = nft.royaltyInfo(ids[0], 1 ether);
+        assertEq(receiver, newReceiver, "new receiver");
+        assertEq(royaltyAmount, 0.1 ether, "10% royalty");
+    }
+
+    // ─────────────────────────── A9 — setDistributor(0) then mint ─────────────────
+
+    function test_A9_mint_works_without_distributor() public {
+        // Unwire the distributor.
+        vm.prank(owner);
+        nft.setDistributor(address(0));
+
+        // Mint should still succeed (no notification attempted).
+        uint256 startSupply = nft.totalSupply();
+        vm.prank(owner);
+        nft.adminMint(5);
+        assertEq(nft.totalSupply(), startSupply + 5, "mint without distributor works");
+
+        // Distributor's activeInTier did NOT change (it wasn't notified).
+        // Re-wire and verify subsequent mints DO notify.
+        vm.prank(owner);
+        nft.setDistributor(address(distributor));
+
+        uint256 activeBefore = _sumActive();
+        vm.prank(owner);
+        nft.adminMint(3);
+        assertEq(_sumActive(), activeBefore + 3, "post-rewire mints notify");
+    }
+
+    // ─────────────────────────── A13 — zero mint price ────────────────────────────
+
+    function test_A13_buy_at_zero_price() public {
+        vm.prank(owner);
+        nft.setMintPrice(0);
+
+        uint256 startSupply = nft.totalSupply();
+        // Send 0 ETH; should succeed.
+        vm.prank(actors[0]);
+        nft.buy{value: 0}(3);
+        assertEq(nft.totalSupply(), startSupply + 3, "free mint works");
+        assertEq(nft.balanceOf(actors[0]), 3, "actor got 3");
+    }
+
+    // ─────────────────────────── A16 — _safeMint to reverting receiver ────────────
+
+    function test_A16_safeMint_to_reverting_receiver() public {
+        // Deploy a contract that rejects ERC721 receives.
+        RejectingReceiver bad = new RejectingReceiver();
+        address[] memory recipients = new address[](1);
+        recipients[0] = address(bad);
+
+        uint256 startSupply = nft.totalSupply();
+        vm.prank(owner);
+        vm.expectRevert(); // _safeMint reverts when receiver rejects
+        nft.giftNFT(recipients);
+        // State unchanged.
+        assertEq(nft.totalSupply(), startSupply, "no mint on reject");
+    }
+}
+
+/// @notice Helper contract for A16: a contract that does NOT implement
+///         IERC721Receiver, so `_safeMint` to it reverts.
+contract RejectingReceiver {
+    // Intentionally no onERC721Received — _safeMint will revert.
 }
