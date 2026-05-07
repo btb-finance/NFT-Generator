@@ -17,25 +17,25 @@ interface ITieredNFT {
 }
 
 /// @custom:security-contact hello@btb.finance
-/// @notice Tier-weighted reward distributor for the OPOSSUM NFT collection.
+/// @notice Tier-weighted reward distributor with a sleep/reap mechanic that
+///         keeps holders active.
 ///
-///         Every fee that lands in this contract is split evenly across 5 rarity
-///         tiers (20% each), and each tier's share is divided by the tier's
-///         actual minted count. So a Mythic earns far more per-NFT than a Common
-///         simply because there are far fewer Mythics.
+///         Fees split 20% per tier; each tier's share divides by the tier's
+///         currently-active count. NFTs that go 100+ days without claiming can
+///         be "reaped" by anyone — the reaper takes the unclaimed rewards and
+///         the NFT goes to sleep (no longer earns). The owner must call wake()
+///         to bring it back online.
 ///
-///         If a tier has 0 minted NFTs when fees arrive, that tier's 20% sits in
-///         a per-tier pending bucket. When the first NFT of that tier mints, the
-///         backlog is released to existing tier holders (i.e., that single first
-///         minter of an empty tier inherits the pending share).
-///
-///         Rewards travel with the tokenId — transferring an NFT carries any
-///         unclaimed balance to the new owner, so no staking is required.
+///         Sleeping NFTs leave the divisor, so their would-be share goes to
+///         active holders of the same tier. Active users earn more when the
+///         lazy ones drop out — which is the whole point.
 contract NFTRewardDistributor is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant TIERS = 5;
-    uint256 public constant TIER_BPS = 2000;       // 20% per tier
+    uint256 public constant TIER_BPS = 2000;          // 20% per tier
+    uint256 public constant SLEEP_THRESHOLD = 100 days;
+
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant ACC_PRECISION = 1e30;
 
@@ -45,33 +45,45 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice Cumulative reward-per-NFT for each tier, scaled by ACC_PRECISION.
     uint256[5] public accRewardPerSlot;
 
-    /// @notice Per-tier share that has accrued before any NFT in that tier
-    ///         existed. Released to the first NFT(s) that mint into the tier.
+    /// @notice Per-tier share that has accrued while a tier had 0 active NFTs.
+    ///         Released when the tier transitions back to ≥1 active member.
     uint256[5] public tierPending;
 
-    /// @notice Number of NFTs minted into each tier. Source of truth for
-    ///         per-tier divisor used when distributing rewards.
-    uint256[5] public mintedInTier;
+    /// @notice Currently ACTIVE NFTs in each tier (minted minus asleep).
+    ///         This is the divisor used to split a tier's 20% share.
+    uint256[5] public activeInTier;
 
     /// @notice Total reward-token balance recorded after the last sync.
     uint256 public lastBalance;
 
-    /// @notice Per-tokenId checkpoint of the tier's accRewardPerSlot at last
-    ///         claim or mint time.
+    /// @notice Per-tokenId checkpoint of the tier's accRewardPerSlot.
     mapping(uint256 => uint256) public lastIndex;
 
-    /// @notice Lifetime token wei claimed against a tokenId.
+    /// @notice Lifetime token wei claimed (or reaped) against a tokenId.
     mapping(uint256 => uint256) public lifetimeClaimed;
+
+    /// @notice Last time a tokenId did something that counts as "active":
+    ///         minted, claimed, or woken. Used to enforce SLEEP_THRESHOLD.
+    mapping(uint256 => uint256) public lastActivityAt;
+
+    /// @notice Whether a tokenId has been reaped and is currently dormant.
+    ///         Asleep NFTs do not earn rewards and are excluded from the divisor.
+    mapping(uint256 => bool) public asleep;
 
     event Claimed(address indexed claimer, uint256 indexed tokenId, uint256 amount);
     event Synced(uint256 newRewards);
-    event TierMint(uint256 indexed tokenId, uint8 indexed tier, uint256 newCount);
+    event TierMint(uint256 indexed tokenId, uint8 indexed tier, uint256 newActiveCount);
     event PendingReleased(uint8 indexed tier, uint256 amount);
+    event Reaped(address indexed reaper, uint256 indexed tokenId, uint256 amount);
+    event Woke(address indexed owner, uint256 indexed tokenId);
 
     error NotNFTOwner();
     error NotNFT();
     error ZeroAddress();
     error InvalidTier();
+    error NFTAsleep();
+    error NotAsleep();
+    error NotStaleYet();
 
     constructor(address rewardToken, address nft) {
         if (rewardToken == address(0) || nft == address(0)) revert ZeroAddress();
@@ -81,55 +93,70 @@ contract NFTRewardDistributor is ReentrancyGuard {
 
     // ─────────────────────────── views ───────────────────────────
 
-    /// @notice Pending reward for a tokenId, in token wei.
+    /// @notice Pending reward for a tokenId, in token wei. Returns 0 if asleep.
     function pendingReward(uint256 tokenId) public view returns (uint256) {
+        if (asleep[tokenId]) return 0;
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 projected = _projectedAcc(tier);
         return (projected - lastIndex[tokenId]) / ACC_PRECISION;
     }
 
-    /// @notice Same name as the previous distributor for ABI continuity with
-    ///         OposNFT's `IRewardDistributorView`.
+    /// @notice ABI-compatible view used by OposNFT's `IRewardDistributorView`.
     function pending(uint256 tokenId) external view returns (uint256) {
         return pendingReward(tokenId);
     }
 
-    /// @notice Pending reward in whole token units (decimals stripped).
     function pendingWhole(uint256 tokenId) external view returns (uint256) {
         return pendingReward(tokenId) / 1e18;
     }
 
-    /// @notice Lifetime earned (claimed + currently pending) in token wei.
     function lifetimeEarned(uint256 tokenId) public view returns (uint256) {
         return lifetimeClaimed[tokenId] + pendingReward(tokenId);
     }
 
-    /// @notice Lifetime earned in whole token units.
     function lifetimeEarnedWhole(uint256 tokenId) external view returns (uint256) {
         return lifetimeEarned(tokenId) / 1e18;
     }
 
-    /// @notice The tier-weighted "yield multiplier" for a given tier vs Common,
-    ///         based on current minted counts. Returns 0 if any required count
-    ///         is zero. Useful for UIs.
+    /// @notice Per-NFT yield ratio of `tier` vs Common, ×100 (e.g., 6500 = 65×).
+    ///         Based on currently-active counts, so dormant NFTs amplify the
+    ///         multiplier for their active peers.
     function yieldMultiplier(uint8 tier) external view returns (uint256) {
         if (tier >= TIERS) revert InvalidTier();
-        uint256 commonCount = mintedInTier[4];
-        uint256 tierCount = mintedInTier[tier];
+        uint256 commonCount = activeInTier[4];
+        uint256 tierCount = activeInTier[tier];
         if (commonCount == 0 || tierCount == 0) return 0;
-        // Each tier earns the same total share, so per-NFT ratio is commonCount/tierCount.
-        return (commonCount * 100) / tierCount; // returns ×100 (e.g., 6500 = 65×)
+        return (commonCount * 100) / tierCount;
     }
 
-    // ─────────────────────────── mutations ───────────────────────────
+    /// @notice True if the NFT can currently be reaped (stale ≥ SLEEP_THRESHOLD
+    ///         and not already asleep).
+    function isReapable(uint256 tokenId) external view returns (bool) {
+        if (asleep[tokenId]) return false;
+        return block.timestamp >= lastActivityAt[tokenId] + SLEEP_THRESHOLD;
+    }
 
-    /// @notice Claim a single tokenId's pending reward. Caller must own the NFT.
+    /// @notice Seconds remaining before this tokenId becomes reapable. Returns
+    ///         0 if already past the threshold or already asleep.
+    function secondsUntilStale(uint256 tokenId) external view returns (uint256) {
+        if (asleep[tokenId]) return 0;
+        uint256 deadline = lastActivityAt[tokenId] + SLEEP_THRESHOLD;
+        if (block.timestamp >= deadline) return 0;
+        return deadline - block.timestamp;
+    }
+
+    // ─────────────────────────── core mutations ───────────────────────────
+
+    /// @notice Claim a single tokenId's pending reward. Caller must own the NFT
+    ///         and the NFT must be awake.
     function claim(uint256 tokenId) external nonReentrant {
         if (NFT.ownerOf(tokenId) != msg.sender) revert NotNFTOwner();
+        if (asleep[tokenId]) revert NFTAsleep();
         _sync();
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
         lastIndex[tokenId] = accRewardPerSlot[tier];
+        lastActivityAt[tokenId] = block.timestamp;
         if (owed > 0) {
             lifetimeClaimed[tokenId] += owed;
             lastBalance -= owed;
@@ -139,7 +166,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         }
     }
 
-    /// @notice Claim multiple tokenIds in one call. All must be owned by the caller.
+    /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep.
     function claimMany(uint256[] calldata tokenIds) external nonReentrant {
         _sync();
         uint256 total;
@@ -147,9 +174,11 @@ contract NFTRewardDistributor is ReentrancyGuard {
         for (uint256 i; i < len; ++i) {
             uint256 id = tokenIds[i];
             if (NFT.ownerOf(id) != msg.sender) revert NotNFTOwner();
+            if (asleep[id]) revert NFTAsleep();
             uint8 tier = NFT.tierIndexOf(id);
             uint256 owed = (accRewardPerSlot[tier] - lastIndex[id]) / ACC_PRECISION;
             lastIndex[id] = accRewardPerSlot[tier];
+            lastActivityAt[id] = block.timestamp;
             if (owed > 0) {
                 lifetimeClaimed[id] += owed;
                 total += owed;
@@ -163,43 +192,97 @@ contract NFTRewardDistributor is ReentrancyGuard {
         }
     }
 
-    /// @notice Public sync — anyone can call to refresh the per-tier indices and
-    ///         nudge marketplaces (via ERC-4906) to refresh metadata.
+    /// @notice Public sync — anyone can refresh the per-tier indices.
     function sync() external {
         if (_sync()) {
             _tryEmitBatchMetadataUpdate();
         }
     }
 
-    /// @notice Called by the NFT contract right after a batch mint. Snapshots
-    ///         lastIndex for each new tokenId at the current tier index, then
-    ///         increments tier counts. If a tier transitions from 0→N in this
-    ///         batch, its pending share is released to the new minters.
+    // ─────────────────────────── sleep / reap ───────────────────────────
+
+    /// @notice Reap a stale NFT. Anyone can call after SLEEP_THRESHOLD has
+    ///         passed since the NFT's last activity. Caller takes 100% of the
+    ///         pending reward; the NFT is marked asleep and stops earning.
+    function reap(uint256 tokenId) external nonReentrant {
+        if (asleep[tokenId]) revert NFTAsleep();
+        if (block.timestamp < lastActivityAt[tokenId] + SLEEP_THRESHOLD) revert NotStaleYet();
+        _sync();
+        uint8 tier = NFT.tierIndexOf(tokenId);
+        uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
+        lastIndex[tokenId] = accRewardPerSlot[tier];
+        asleep[tokenId] = true;
+        if (activeInTier[tier] > 0) {
+            unchecked { activeInTier[tier] -= 1; }
+        }
+        if (owed > 0) {
+            lifetimeClaimed[tokenId] += owed;
+            lastBalance -= owed;
+            REWARD_TOKEN.safeTransfer(msg.sender, owed);
+            _tryEmitMetadataUpdate(tokenId);
+            emit Reaped(msg.sender, tokenId, owed);
+        }
+    }
+
+    /// @notice Wake a sleeping NFT. Only callable by the current owner. The NFT
+    ///         starts earning again from the moment it's woken — it does NOT
+    ///         retroactively claim rewards that grew during its sleep.
+    function wake(uint256 tokenId) external nonReentrant {
+        if (NFT.ownerOf(tokenId) != msg.sender) revert NotNFTOwner();
+        if (!asleep[tokenId]) revert NotAsleep();
+        _sync();
+
+        uint8 tier = NFT.tierIndexOf(tokenId);
+        uint256 prevActive = activeInTier[tier];
+
+        // Snapshot lastIndex to current accRewardPerSlot so this NFT only earns
+        // from now forward — it does NOT claim the during-sleep growth.
+        lastIndex[tokenId] = accRewardPerSlot[tier];
+        asleep[tokenId] = false;
+        unchecked { activeInTier[tier] = prevActive + 1; }
+        lastActivityAt[tokenId] = block.timestamp;
+
+        // If this is the only active NFT in the tier and there's pending share
+        // (because the tier was empty), release the backlog to this owner.
+        if (prevActive == 0 && tierPending[tier] > 0) {
+            accRewardPerSlot[tier] += (tierPending[tier] * ACC_PRECISION) / 1;
+            emit PendingReleased(tier, tierPending[tier]);
+            tierPending[tier] = 0;
+        }
+
+        _tryEmitMetadataUpdate(tokenId);
+        emit Woke(msg.sender, tokenId);
+    }
+
+    // ─────────────────────────── mint hook ───────────────────────────
+
+    /// @notice Called by the NFT contract right after a batch mint.
     function onMintBatch(uint256[] calldata tokenIds) external {
         if (msg.sender != address(NFT)) revert NotNFT();
         _sync();
 
-        // Track which tiers are seeing their first mint(s) in this batch.
         uint256[5] memory countsBefore = [
-            mintedInTier[0], mintedInTier[1], mintedInTier[2],
-            mintedInTier[3], mintedInTier[4]
+            activeInTier[0], activeInTier[1], activeInTier[2],
+            activeInTier[3], activeInTier[4]
         ];
 
+        uint256 nowTs = block.timestamp;
         uint256 len = tokenIds.length;
         for (uint256 i; i < len; ++i) {
             uint256 id = tokenIds[i];
             uint8 tier = NFT.tierIndexOf(id);
-            // Snapshot BEFORE any pending-release update so brand-new minters
-            // in an empty tier still earn that tier's backlog.
+            // Snapshot BEFORE pending release so first minters of an empty tier
+            // still earn that tier's backlog.
             lastIndex[id] = accRewardPerSlot[tier];
-            unchecked { mintedInTier[tier] += 1; }
-            emit TierMint(id, tier, mintedInTier[tier]);
+            lastActivityAt[id] = nowTs;
+            unchecked { activeInTier[tier] += 1; }
+            emit TierMint(id, tier, activeInTier[tier]);
         }
 
-        // Release pending for any tier that went from 0 minted to N>0 in this batch.
+        // Release pending for tiers that went from 0 → N>0 in this batch.
         for (uint8 t; t < TIERS; ++t) {
-            if (countsBefore[t] == 0 && mintedInTier[t] > 0 && tierPending[t] > 0) {
-                accRewardPerSlot[t] += (tierPending[t] * ACC_PRECISION) / mintedInTier[t];
+            if (countsBefore[t] == 0 && activeInTier[t] > 0 && tierPending[t] > 0) {
+                accRewardPerSlot[t] += (tierPending[t] * ACC_PRECISION) / activeInTier[t];
                 emit PendingReleased(t, tierPending[t]);
                 tierPending[t] = 0;
             }
@@ -214,12 +297,10 @@ contract NFTRewardDistributor is ReentrancyGuard {
         uint256 newRewards = currentBalance - lastBalance;
         lastBalance = currentBalance;
 
-        // Split fees across the 5 tiers; uneven dust (mod 5) stays in the
-        // contract as a rounding remainder.
         for (uint8 t; t < TIERS; ++t) {
             uint256 share = (newRewards * TIER_BPS) / BPS_DENOMINATOR;
-            if (mintedInTier[t] > 0) {
-                accRewardPerSlot[t] += (share * ACC_PRECISION) / mintedInTier[t];
+            if (activeInTier[t] > 0) {
+                accRewardPerSlot[t] += (share * ACC_PRECISION) / activeInTier[t];
             } else {
                 tierPending[t] += share;
             }
@@ -230,12 +311,12 @@ contract NFTRewardDistributor is ReentrancyGuard {
 
     function _projectedAcc(uint8 tier) internal view returns (uint256) {
         uint256 currentBalance = REWARD_TOKEN.balanceOf(address(this));
-        if (currentBalance <= lastBalance || mintedInTier[tier] == 0) {
+        if (currentBalance <= lastBalance || activeInTier[tier] == 0) {
             return accRewardPerSlot[tier];
         }
         uint256 newRewards = currentBalance - lastBalance;
         uint256 share = (newRewards * TIER_BPS) / BPS_DENOMINATOR;
-        return accRewardPerSlot[tier] + (share * ACC_PRECISION) / mintedInTier[tier];
+        return accRewardPerSlot[tier] + (share * ACC_PRECISION) / activeInTier[tier];
     }
 
     function _tryEmitMetadataUpdate(uint256 tokenId) internal {
