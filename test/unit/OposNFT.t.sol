@@ -33,15 +33,17 @@ contract OposNFTTest is TestBase {
         // to set the counter directly. We need to know the slot.
         uint256 counterSlot = _findCounterSlot();
 
-        // Set counter so only 1 mint left until MAX.
+        // Set counter so the next mint produces id == MAX.
         vm.store(address(nft), bytes32(counterSlot), bytes32(max));
-        // Now counter = MAX (=88,888); next adminMint(1) should mint id 88,888.
-
+        // Pre-fix, this would have reverted with "Exceeds max supply" because
+        // (max + 1) > max. Post-fix, it succeeds because (max + 1 - 1) <= max.
         vm.prank(owner);
         nft.adminMint(1);
-        assertEq(nft.totalSupply(), 1, "totalSupply derived from counter offset; check works");
 
-        // Counter is now MAX+1 (88,889). Any further mint reverts.
+        // Last id minted IS the cap value — the fix lets MAX_SUPPLY be reached.
+        assertEq(nft.totalSupply(), max, "MAX-th NFT successfully minted");
+
+        // Counter is now MAX+1. Any further mint reverts.
         vm.prank(owner);
         vm.expectRevert(bytes("Exceeds max supply"));
         nft.adminMint(1);
