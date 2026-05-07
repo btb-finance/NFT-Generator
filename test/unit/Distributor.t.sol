@@ -280,6 +280,29 @@ contract DistributorTest is TestBase {
 
     // ─────────────────────────── A10 — all NFTs in tier reaped ────────────────────
 
+    // ─────────────────────────── claimMany batch cap (fix #11) ───────────────────
+
+    function test_claimMany_reverts_when_too_large() public {
+        uint256[] memory ids = _adminMintAs(101);
+        vm.prank(owner);
+        nft.transferFrom(owner, actors[0], ids[0]);
+        for (uint256 i = 1; i < 101; i++) {
+            vm.prank(owner);
+            nft.transferFrom(owner, actors[0], ids[i]);
+        }
+
+        // Pass 101 ids — over the MAX_CLAIM_BATCH = 100 cap.
+        vm.prank(actors[0]);
+        vm.expectRevert(NFTRewardDistributor.BatchTooLarge.selector);
+        distributor.claimMany(ids);
+
+        // Exactly 100 succeeds.
+        uint256[] memory subset = new uint256[](100);
+        for (uint256 i = 0; i < 100; i++) subset[i] = ids[i];
+        vm.prank(actors[0]);
+        distributor.claimMany(subset); // no revert
+    }
+
     function test_A10_all_reaped_then_wake_inherits_backlog() public {
         // Mint 1 NFT → record its tier → reap → fees flow → wake → inherits.
         uint256[] memory ids = _buyAs(actors[0], 1);

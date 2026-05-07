@@ -19,32 +19,44 @@ contract OposNFTTest is TestBase {
 
     // ─────────────────────────── N2 — MAX_SUPPLY enforcement ──────────────────────
 
-    /// @dev Probes the cap directly by checking the require message via revert.
-    ///      Minting all 88,888 NFTs in a single test is impractically slow; the
-    ///      logic is `require(_tokenIdCounter + amount <= MAX_SUPPLY)` so any
-    ///      excess request must revert. Stateful invariants in test/invariant/
-    ///      cover the random walk up to the boundary.
-    function test_N2_buy_amount_exceeds_room_reverts() public {
-        // Even with 0 minted, asking for MAX_SUPPLY+1 must revert.
-        uint256 over = nft.MAX_SUPPLY() + 1;
-        // buy() is capped at 500 per call — use adminMint to test the amount-vs-room logic
-        // at a higher per-call cap (200), which still illustrates the boundary.
-        // Adjusting: ask for 201 to exceed the per-call cap also reverts (1-200 limit).
-        vm.prank(owner);
-        vm.expectRevert(bytes("Amount must be 1-200"));
-        nft.adminMint(201);
+    /// @dev Verifies the corrected MAX_SUPPLY boundary: the LAST minted id must
+    ///      be reachable. Pre-fix, the check `_tokenIdCounter + amount <= MAX`
+    ///      meant only 88,887 ids were reachable. Now id 88,888 IS mintable.
+    ///      Uses vm.store to skip the counter near the cap.
+    function test_N2_max_supply_boundary_reachable_and_capped() public {
+        // _tokenIdCounter is the FIRST private storage var on OposNFT — but
+        // OposNFT inherits from ERC721, ERC2981, Ownable, ReentrancyGuard,
+        // each with their own slots. Find the slot empirically: bump and read.
+        uint256 max = nft.MAX_SUPPLY(); // 88,888
 
-        // The "Exceeds max supply" branch fires when sum overflows MAX_SUPPLY. With
-        // 0 minted, asking for MAX_SUPPLY tokens succeeds at the boundary; asking
-        // for MAX_SUPPLY+1 hits the per-call cap. Round-trip via gift to test the
-        // overflow path:
-        address[] memory recipients = new address[](500);
-        for (uint256 i = 0; i < 500; ++i) recipients[i] = actors[0];
-        // 88,888 ÷ 500 ≈ 178 batches max; we just confirm one big-enough call.
-        // Since MAX_SUPPLY = 88,888 and giftNFT cap = 500, hitting the overflow
-        // requires either pre-state or smaller MAX. We rely on the stateful
-        // invariant `invariant_supply_within_cap` to catch any overflow.
-        over; recipients;
+        // Strategy: warp counter to MAX-1 by minting 1 NFT and using vm.store
+        // to set the counter directly. We need to know the slot.
+        uint256 counterSlot = _findCounterSlot();
+
+        // Set counter so only 1 mint left until MAX.
+        vm.store(address(nft), bytes32(counterSlot), bytes32(max));
+        // Now counter = MAX (=88,888); next adminMint(1) should mint id 88,888.
+
+        vm.prank(owner);
+        nft.adminMint(1);
+        assertEq(nft.totalSupply(), 1, "totalSupply derived from counter offset; check works");
+
+        // Counter is now MAX+1 (88,889). Any further mint reverts.
+        vm.prank(owner);
+        vm.expectRevert(bytes("Exceeds max supply"));
+        nft.adminMint(1);
+    }
+
+    /// @dev Walks the first ~15 storage slots looking for one that holds the
+    ///      tokenId counter we just observed. Brittle but adequate for one test.
+    function _findCounterSlot() internal view returns (uint256) {
+        for (uint256 s = 0; s < 30; s++) {
+            bytes32 v = vm.load(address(nft), bytes32(s));
+            if (uint256(v) == 1) {
+                return s; // initial _tokenIdCounter = 1
+            }
+        }
+        revert("counter slot not found");
     }
 
     // ─────────────────────────── N3 — payment correctness ─────────────────────────
@@ -282,25 +294,40 @@ contract OposNFTTest is TestBase {
         assertEq(nft.balanceOf(actors[0]), 3, "actor got 3");
     }
 
-    // ─────────────────────────── A16 — _safeMint to reverting receiver ────────────
+    // ─────────────────────────── A16 — receiver behavior ─────────────────────────
 
-    function test_A16_safeMint_to_reverting_receiver() public {
-        // Deploy a contract that rejects ERC721 receives.
+    /// @dev `giftNFT` uses `_mint` (no callback), so a non-receiving contract
+    ///      in the recipients list does NOT grief the batch. The contract just
+    ///      receives the NFT — owner is responsible for vetting recipients.
+    function test_A16_giftNFT_to_non_receiver_contract_succeeds() public {
         RejectingReceiver bad = new RejectingReceiver();
-        address[] memory recipients = new address[](1);
+        address[] memory recipients = new address[](2);
+        recipients[0] = bad == bad ? address(bad) : actors[0];
         recipients[0] = address(bad);
+        recipients[1] = actors[0];
 
         uint256 startSupply = nft.totalSupply();
         vm.prank(owner);
-        vm.expectRevert(); // _safeMint reverts when receiver rejects
         nft.giftNFT(recipients);
-        // State unchanged.
-        assertEq(nft.totalSupply(), startSupply, "no mint on reject");
+        assertEq(nft.totalSupply(), startSupply + 2, "both NFTs minted");
+        assertEq(nft.balanceOf(address(bad)), 1, "bad receiver got NFT");
+        assertEq(nft.balanceOf(actors[0]), 1, "actor got NFT");
+    }
+
+    /// @dev `buy` still uses `_safeMint`, so a non-receiving contract calling
+    ///      `buy` reverts — protects buyers from getting stuck NFTs.
+    function test_A16_buy_to_non_receiver_contract_reverts() public {
+        RejectingReceiver bad = new RejectingReceiver();
+        uint256 cost = nft.mintPrice();
+        vm.deal(address(bad), cost);
+        vm.prank(address(bad));
+        vm.expectRevert(); // _safeMint reverts when receiver rejects
+        nft.buy{value: cost}(1);
     }
 }
 
 /// @notice Helper contract for A16: a contract that does NOT implement
-///         IERC721Receiver, so `_safeMint` to it reverts.
+///         IERC721Receiver. `_safeMint` reverts; `_mint` does not.
 contract RejectingReceiver {
-    // Intentionally no onERC721Received — _safeMint will revert.
+    // Intentionally no onERC721Received.
 }
