@@ -105,6 +105,7 @@
   </div>
   <button onclick="mintTwenty()">Mint 20 New</button>
 </header>
+<div id="dist-bar" style="background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 16px; font-size: 12px; color: var(--muted);"></div>
 <div id="grid" class="grid"></div>
 
 <script>
@@ -356,12 +357,33 @@ function randomSeed() {
   return s;
 }
 
+function tierIndex(seed) {
+  const r = rarityTier(seed);
+  return ["Mythic","Legendary","Epic","Rare","Common"].indexOf(r);
+}
+
+// Tier name → percent of fees that tier earns (always 20%) and what each NFT
+// in this batch would earn relative to a Common, given just these 20 mints.
+function distributionSummary(seedsList) {
+  const counts = [0,0,0,0,0];
+  for (const s of seedsList) counts[tierIndex(s)]++;
+  const tierNames = ["Mythic","Legendary","Epic","Rare","Common"];
+  const parts = tierNames.map((n, i) => {
+    const c = counts[i];
+    const perNft = c > 0 ? `20% / ${c} = ${(20/c).toFixed(2)}%` : `20% (banked — no NFT yet)`;
+    return `<b style="color:var(--text)">${n}</b> ${c} NFT${c===1?"":"s"} → ${perNft} each`;
+  });
+  return "Per fee, each tier earns 20%. From this 20-mint sample: " + parts.join(" · ");
+}
+
 function mintTwenty() {
   const grid = document.getElementById("grid");
+  const bar = document.getElementById("dist-bar");
   grid.innerHTML = "";
-  for (let i = 0; i < 20; i++) {
-    grid.appendChild(makeCard(i + 1, randomSeed()));
-  }
+  const seeds = [];
+  for (let i = 0; i < 20; i++) seeds.push(randomSeed());
+  for (let i = 0; i < 20; i++) grid.appendChild(makeCard(i + 1, seeds[i]));
+  bar.innerHTML = distributionSummary(seeds);
 }
 
 mintTwenty();

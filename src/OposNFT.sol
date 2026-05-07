@@ -19,6 +19,10 @@ interface IRewardDistributorView {
     function lifetimeEarned(uint256 tokenId) external view returns (uint256);
 }
 
+interface IRewardDistributorMint {
+    function onMintBatch(uint256[] calldata tokenIds) external;
+}
+
 /**
  * @title OposNFT
  * @dev OPOSSUM-ecosystem NFT collection. Fully on-chain SVG art via OposRenderer,
@@ -96,12 +100,15 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
         require(amount > 0 && amount <= 200, "Amount must be 1-200");
         require(_tokenIdCounter + amount <= MAX_SUPPLY, "Exceeds max supply");
 
+        uint256[] memory ids = new uint256[](amount);
         for (uint256 i = 0; i < amount; i++) {
             uint256 tokenId = _tokenIdCounter++;
             uint256 traits = _generateTraits(tokenId);
             tokenTraits[tokenId] = traits;
+            ids[i] = tokenId;
             _safeMint(msg.sender, tokenId);
         }
+        _notifyDistributor(ids);
     }
 
     /**
@@ -115,12 +122,15 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
         uint256 totalCost = mintPrice * amount;
         require(msg.value >= totalCost, "Insufficient ETH sent");
 
+        uint256[] memory ids = new uint256[](amount);
         for (uint256 i = 0; i < amount; i++) {
             uint256 tokenId = _tokenIdCounter++;
             uint256 traits = _generateTraits(tokenId);
             tokenTraits[tokenId] = traits;
+            ids[i] = tokenId;
             _safeMint(msg.sender, tokenId);
         }
+        _notifyDistributor(ids);
 
         emit NFTPurchased(msg.sender, amount, totalCost);
 
@@ -128,6 +138,25 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
         if (msg.value > totalCost) {
             payable(msg.sender).transfer(msg.value - totalCost);
         }
+    }
+
+    /**
+     * @dev Tells the distributor about freshly-minted tokenIds so it can
+     *      checkpoint per-tier reward indices. Skipped if distributor is unset.
+     */
+    function _notifyDistributor(uint256[] memory ids) private {
+        IRewardDistributorView dist = distributor;
+        if (address(dist) == address(0)) return;
+        IRewardDistributorMint(address(dist)).onMintBatch(ids);
+    }
+
+    /**
+     * @dev Public tier index for a tokenId: 0=Mythic, 1=Legendary, 2=Epic,
+     *      3=Rare, 4=Common. The distributor reads this to route rewards.
+     */
+    function tierIndexOf(uint256 tokenId) external view returns (uint8) {
+        require(ownerOf(tokenId) != address(0), "Token does not exist");
+        return _getRarityIndex(tokenTraits[tokenId]);
     }
 
     /**
@@ -226,6 +255,19 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      * Common: ~65% (~57,777 NFTs) - Standard traits
      */
     function _getRarityTier(uint256 seed) private pure returns (string memory) {
+        uint8 idx = _getRarityIndex(seed);
+        if (idx == 0) return "Mythic";
+        if (idx == 1) return "Legendary";
+        if (idx == 2) return "Epic";
+        if (idx == 3) return "Rare";
+        return "Common";
+    }
+
+    /**
+     * @dev Returns the tier index from a trait seed: 0=Mythic, 1=Legendary,
+     *      2=Epic, 3=Rare, 4=Common. Mirrors the score logic in `_getRarityTier`.
+     */
+    function _getRarityIndex(uint256 seed) private pure returns (uint8) {
         // All casts are safe because we mod by small values
         // forge-lint: disable-next-line(unsafe-typecast)
         uint8 bodyIndex = uint8(seed % 30);
@@ -266,12 +308,12 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
             rarityScore += 1;
         }
 
-        // Determine tier based on score
-        if (rarityScore >= 6) return "Mythic";      // ~1% = ~889 NFTs out of 88,888
-        if (rarityScore >= 4) return "Legendary";   // ~4% = ~3,556 NFTs
-        if (rarityScore >= 3) return "Epic";        // ~10% = ~8,889 NFTs
-        if (rarityScore >= 1) return "Rare";        // ~20% = ~17,778 NFTs
-        return "Common";                             // ~65% = ~57,777 NFTs
+        // Determine tier index based on score
+        if (rarityScore >= 6) return 0;  // Mythic     (~1%  = ~889 NFTs)
+        if (rarityScore >= 4) return 1;  // Legendary  (~4%  = ~3,556 NFTs)
+        if (rarityScore >= 3) return 2;  // Epic       (~10% = ~8,889 NFTs)
+        if (rarityScore >= 1) return 3;  // Rare       (~20% = ~17,778 NFTs)
+        return 4;                         // Common     (~65% = ~57,776 NFTs)
     }
 
     function _getBodyName(uint256 seed) private pure returns (string memory) {
