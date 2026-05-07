@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Compatible with OpenZeppelin Contracts ^5.5.0
-pragma solidity ^0.8.30;
+// Compatible with OpenZeppelin Contracts ^5.6.0
+pragma solidity ^0.8.34;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
