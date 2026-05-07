@@ -485,7 +485,9 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     }
 
     function totalSupply() external view returns (uint256) {
-        return _tokenIdCounter;
+        // _tokenIdCounter starts at 1 and is incremented AFTER assigning a tokenId,
+        // so it always equals (last minted id + 1). Subtract 1 for actual count.
+        return _tokenIdCounter - 1;
     }
 
     /**
