@@ -3,30 +3,45 @@ pragma solidity ^0.8.30;
 
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
-import "../src/PixelCatsRenderer.sol";
-import "../src/PixelCatsFullOnChain.sol";
+import {OposRenderer} from "../src/OposRenderer.sol";
+import {OposNFT} from "../src/OposNFT.sol";
+import {NFTRewardDistributor} from "../src/NFTRewardDistributor.sol";
 
-contract DeployBTBCat is Script {
+/// @notice Deploys the OPOSSUM NFT collection + on-chain renderer + reward distributor.
+///         After this script runs, the deployer must (separately) call
+///         `OPOSSUM.setTreasury(distributor)` on the already-deployed OPOS ERC20
+///         and `nft.setDistributor(distributor)` here to wire everything up.
+contract Deploy is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address oposToken = vm.envAddress("OPOS_TOKEN");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy Renderer first
-        console.log("Deploying PixelCatsRenderer...");
-        PixelCatsRenderer renderer = new PixelCatsRenderer();
-        console.log("PixelCatsRenderer deployed at:", address(renderer));
+        console.log("Deploying OposRenderer...");
+        OposRenderer renderer = new OposRenderer();
+        console.log("OposRenderer:", address(renderer));
 
-        // Deploy Main Contract with Renderer address
-        console.log("Deploying PixelCatsFullOnChainV2...");
-        PixelCatsFullOnChainV2 btbCat = new PixelCatsFullOnChainV2(address(renderer));
-        console.log("PixelCatsFullOnChainV2 deployed at:", address(btbCat));
+        console.log("Deploying OposNFT...");
+        OposNFT nft = new OposNFT(address(renderer));
+        console.log("OposNFT:", address(nft));
+
+        console.log("Deploying NFTRewardDistributor...");
+        NFTRewardDistributor distributor = new NFTRewardDistributor(oposToken, address(nft));
+        console.log("NFTRewardDistributor:", address(distributor));
+
+        // Wire the NFT to the distributor so tokenURI shows live yield
+        // and ERC-4906 events route correctly.
+        nft.setDistributor(address(distributor));
 
         vm.stopBroadcast();
 
         console.log("\n=== Deployment Summary ===");
-        console.log("Renderer:", address(renderer));
-        console.log("BTB CAT NFT:", address(btbCat));
-        console.log("==========================\n");
+        console.log("OPOS token:         ", oposToken);
+        console.log("Renderer:           ", address(renderer));
+        console.log("OPOSSUM NFT:        ", address(nft));
+        console.log("Reward Distributor: ", address(distributor));
+        console.log("==========================");
+        console.log("Next step: call OPOSSUM.setTreasury(distributor) on the OPOS ERC20.");
     }
 }

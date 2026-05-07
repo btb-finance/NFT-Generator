@@ -10,8 +10,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
-interface IPixelCatsRenderer {
-    function buildPixelCat(uint256 seed) external pure returns (string memory);
+interface IOposRenderer {
+    function buildArt(uint256 seed) external pure returns (string memory);
 }
 
 interface IRewardDistributorView {
@@ -20,17 +20,17 @@ interface IRewardDistributorView {
 }
 
 /**
- * @title PixelCatsFullOnChainV2
- * @dev Split architecture - Main contract + Renderer contract
- * Supports 31.5M+ unique combinations for 100k+ NFTs
- * Includes ERC2981 royalty support for OpenSea creator earnings
+ * @title OposNFT
+ * @dev OPOSSUM-ecosystem NFT collection. Fully on-chain SVG art via OposRenderer,
+ *      ERC-2981 royalties for marketplaces, ERC-4906 metadata-update events for
+ *      live yield display, and per-token OPOS yield via the NFTRewardDistributor.
  */
-contract PixelCatsFullOnChainV2 is ERC721, ERC2981, IERC4906, Ownable {
+contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     using Strings for uint256;
 
     uint256 private _tokenIdCounter = 1; // Start from 1, not 0
     mapping(uint256 => uint256) private tokenTraits;
-    IPixelCatsRenderer public renderer;
+    IOposRenderer public renderer;
 
     /// @notice Distributor contract that holds OPOS rewards and tracks per-NFT yield.
     ///         Set after deployment via setDistributor.
@@ -45,14 +45,14 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, IERC4906, Ownable {
     event NFTPurchased(address indexed buyer, uint256 amount, uint256 totalCost);
     event DistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
-    constructor(address _renderer) ERC721("BTB CAT", "BTBC") Ownable(msg.sender) {
-        renderer = IPixelCatsRenderer(_renderer);
+    constructor(address _renderer) ERC721("OPOSSUM NFT", "OPOSN") Ownable(msg.sender) {
+        renderer = IOposRenderer(_renderer);
         // Set 5% royalty fee to contract owner
         _setDefaultRoyalty(msg.sender, 500); // 500 basis points = 5%
     }
 
     function setRenderer(address _renderer) external onlyOwner {
-        renderer = IPixelCatsRenderer(_renderer);
+        renderer = IOposRenderer(_renderer);
     }
 
     /**
@@ -145,16 +145,16 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, IERC4906, Ownable {
     }
 
     /**
-     * @dev Generate complete pixel art SVG on-chain via renderer
+     * @dev Build the on-chain JSON metadata: SVG image + traits + live OPOS yield.
      */
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         require(ownerOf(tokenId) != address(0), "Token does not exist");
 
-        string memory svg = renderer.buildPixelCat(tokenTraits[tokenId]);
+        string memory svg = renderer.buildArt(tokenTraits[tokenId]);
         string memory rarity = _getRarityTier(tokenTraits[tokenId]);
         string memory json = string(abi.encodePacked(
-            '{"name":"BTB CAT ', rarity, ' #', tokenId.toString(), '",',
-            '"description":"88888 BTB CATs living fully on-chain. Following BTB bonding curve, each token is backed by real BTB with unique pixel art combinations.",',
+            '{"name":"OPOSSUM ', rarity, ' #', tokenId.toString(), '",',
+            '"description":"88,888 fully on-chain OPOSSUM NFTs. Every holder earns a 1/88,888 share of every OPOS transfer tax in real time, claimable on demand.",',
             '"attributes":[',
             _getAttributes(tokenTraits[tokenId]),
             ',',

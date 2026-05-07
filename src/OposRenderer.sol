@@ -4,16 +4,16 @@ pragma solidity ^0.8.34;
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
- * @title PixelCatsRenderer
- * @dev Handles all pixel art generation and SVG rendering
+ * @title OposRenderer
+ * @dev Handles all on-chain SVG rendering for the OPOSSUM NFT collection.
  */
-contract PixelCatsRenderer {
+contract OposRenderer {
     using Strings for uint256;
 
     /**
-     * @dev Build complete pixel cat SVG with 24x24 grid
+     * @dev Build the complete on-chain SVG for a tokenId given its trait seed.
      */
-    function buildPixelCat(uint256 seed) external pure returns (string memory) {
+    function buildArt(uint256 seed) external pure returns (string memory) {
         string memory pixels = _drawCatPixels(seed);
         string memory bgColor = _getBackground(seed);
 

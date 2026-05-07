@@ -7,7 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-interface IPixelCatsMetaHook {
+interface IMetadataUpdateHook {
     function emitMetadataUpdate(uint256 tokenId) external;
     function emitBatchMetadataUpdate() external;
 }
@@ -155,10 +155,10 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     function _tryEmitMetadataUpdate(uint256 tokenId) internal {
-        try IPixelCatsMetaHook(address(NFT)).emitMetadataUpdate(tokenId) {} catch {}
+        try IMetadataUpdateHook(address(NFT)).emitMetadataUpdate(tokenId) {} catch {}
     }
 
     function _tryEmitBatchMetadataUpdate() internal {
-        try IPixelCatsMetaHook(address(NFT)).emitBatchMetadataUpdate() {} catch {}
+        try IMetadataUpdateHook(address(NFT)).emitBatchMetadataUpdate() {} catch {}
     }
 }
