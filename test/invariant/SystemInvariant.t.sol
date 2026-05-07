@@ -36,25 +36,21 @@ contract SystemInvariantTest is TestBase {
 
     // ─────────────────────────── G2 — conservation ────────────────────────────────
 
-    /// @notice Every wei of fees received accounted for: claimed + pending +
-    ///         tierPending + dust = total received. Tolerance of 100 wei per
-    ///         sync × ~20 expected syncs in a deep run = generous bound.
+    /// @notice Every wei the distributor ever received was either paid out or
+    ///         is still sitting in the contract. No fees vanish, no fees are
+    ///         conjured. This formulation needs zero dust tolerance because
+    ///         "still in the contract" includes any rounding dust.
     function invariant_G2_conservation() public {
-        uint256 totalLifetime;
-        uint256 totalPending;
+        uint256 totalLifetimePaid;
         for (uint256 id = 1; id <= handler.ghost_maxId(); ++id) {
-            totalLifetime += distributor.lifetimeClaimed(id);
-            totalPending += distributor.pending(id);
+            totalLifetimePaid += distributor.lifetimeClaimed(id);
         }
-        uint256 tierPendingSum = _sumTierPending();
-        uint256 accountedFor = totalLifetime + totalPending + tierPendingSum;
-        uint256 received = handler.ghost_totalFeesReceived();
-        // accountedFor ≤ received (we never invent fees);
-        // received - accountedFor = dust (acceptable rounding)
-        assertLe(accountedFor, received, "G2: more accounted than received");
-        // Dust tolerance: PRECISION division loses up to (count) wei per tier per sync.
-        // Conservative: 100,000 wei tolerance accommodates many syncs across many tiers.
-        assertLe(received - accountedFor, 100_000, "G2: too much dust lost");
+        uint256 currentBalance = opos.balanceOf(address(distributor));
+        assertEq(
+            totalLifetimePaid + currentBalance,
+            handler.ghost_totalFeesReceived(),
+            "G2: total in + paid out != received"
+        );
     }
 
     // ─────────────────────────── G5 — active count integrity ──────────────────────
