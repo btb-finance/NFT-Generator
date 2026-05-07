@@ -4,6 +4,8 @@ pragma solidity ^0.8.34;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
+import {IERC4906} from "@openzeppelin/contracts/interfaces/IERC4906.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -12,18 +14,27 @@ interface IPixelCatsRenderer {
     function buildPixelCat(uint256 seed) external pure returns (string memory);
 }
 
+interface IRewardDistributorView {
+    function pending(uint256 tokenId) external view returns (uint256);
+    function lifetimeEarned(uint256 tokenId) external view returns (uint256);
+}
+
 /**
  * @title PixelCatsFullOnChainV2
  * @dev Split architecture - Main contract + Renderer contract
  * Supports 31.5M+ unique combinations for 100k+ NFTs
  * Includes ERC2981 royalty support for OpenSea creator earnings
  */
-contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
+contract PixelCatsFullOnChainV2 is ERC721, ERC2981, IERC4906, Ownable {
     using Strings for uint256;
 
     uint256 private _tokenIdCounter = 1; // Start from 1, not 0
     mapping(uint256 => uint256) private tokenTraits;
     IPixelCatsRenderer public renderer;
+
+    /// @notice Distributor contract that holds OPOS rewards and tracks per-NFT yield.
+    ///         Set after deployment via setDistributor.
+    IRewardDistributorView public distributor;
 
     // Supply and pricing
     uint256 public constant MAX_SUPPLY = 88888;
@@ -32,6 +43,7 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
     // Events
     event MintPriceUpdated(uint256 newPrice);
     event NFTPurchased(address indexed buyer, uint256 amount, uint256 totalCost);
+    event DistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
     constructor(address _renderer) ERC721("BTB CAT", "BTBC") Ownable(msg.sender) {
         renderer = IPixelCatsRenderer(_renderer);
@@ -41,6 +53,30 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
 
     function setRenderer(address _renderer) external onlyOwner {
         renderer = IPixelCatsRenderer(_renderer);
+    }
+
+    /**
+     * @dev Wire up the OPOS reward distributor. Once set, `tokenURI` will display
+     *      claimable + lifetime OPOS as integer traits, and the distributor may
+     *      emit ERC-4906 metadata-update events through this contract.
+     */
+    function setDistributor(address _distributor) external onlyOwner {
+        address old = address(distributor);
+        distributor = IRewardDistributorView(_distributor);
+        emit DistributorUpdated(old, _distributor);
+        emit BatchMetadataUpdate(1, MAX_SUPPLY);
+    }
+
+    /// @dev Distributor-only proxy so it can signal a single-token metadata refresh.
+    function emitMetadataUpdate(uint256 tokenId) external {
+        require(msg.sender == address(distributor), "Not distributor");
+        emit MetadataUpdate(tokenId);
+    }
+
+    /// @dev Distributor-only proxy for full-collection metadata refresh.
+    function emitBatchMetadataUpdate() external {
+        require(msg.sender == address(distributor), "Not distributor");
+        emit BatchMetadataUpdate(1, MAX_SUPPLY);
     }
 
     /**
@@ -121,11 +157,33 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
             '"description":"88888 BTB CATs living fully on-chain. Following BTB bonding curve, each token is backed by real BTB with unique pixel art combinations.",',
             '"attributes":[',
             _getAttributes(tokenTraits[tokenId]),
+            ',',
+            _getYieldAttributes(tokenId),
             '],',
             '"image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)), '"}'
         ));
 
         return string(abi.encodePacked("data:application/json;base64,", Base64.encode(bytes(json))));
+    }
+
+    /**
+     * @dev Builds the two OPOS yield traits as numeric (decimal-stripped) values.
+     *      Returns "0" for both if no distributor is wired up yet, so the
+     *      attribute shape stays stable across the contract's lifetime.
+     */
+    function _getYieldAttributes(uint256 tokenId) private view returns (string memory) {
+        uint256 claimable;
+        uint256 lifetime;
+        IRewardDistributorView dist = distributor;
+        if (address(dist) != address(0)) {
+            // Strip 18 decimals — display whole OPOS units only.
+            claimable = dist.pending(tokenId) / 1e18;
+            lifetime = dist.lifetimeEarned(tokenId) / 1e18;
+        }
+        return string(abi.encodePacked(
+            '{"display_type":"number","trait_type":"Claimable OPOS","value":', claimable.toString(), '},',
+            '{"display_type":"number","trait_type":"Lifetime OPOS","value":', lifetime.toString(), '}'
+        ));
     }
 
     function _getAttributes(uint256 seed) private view returns (string memory) {
@@ -356,9 +414,10 @@ contract PixelCatsFullOnChainV2 is ERC721, ERC2981, Ownable {
     function supportsInterface(bytes4 interfaceId)
         public
         view
-        override(ERC721, ERC2981)
+        override(ERC721, ERC2981, IERC165)
         returns (bool)
     {
-        return super.supportsInterface(interfaceId);
+        // 0x49064906 = ERC-4906 (MetadataUpdate / BatchMetadataUpdate).
+        return interfaceId == bytes4(0x49064906) || super.supportsInterface(interfaceId);
     }
 }
