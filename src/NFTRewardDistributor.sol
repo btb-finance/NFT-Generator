@@ -84,6 +84,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     error NFTAsleep();
     error NotAsleep();
     error NotStaleYet();
+    error BatchTooLarge();
 
     constructor(address rewardToken, address nft) {
         if (rewardToken == address(0) || nft == address(0)) revert ZeroAddress();
@@ -161,14 +162,21 @@ contract NFTRewardDistributor is ReentrancyGuard {
         _claim(user, tokenId);
     }
 
-    /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep.
+    /// @notice Maximum tokenIds in a single `claimMany` call. Bounds gas so a
+    ///         user with many NFTs splits the work across a few transactions.
+    uint256 public constant MAX_CLAIM_BATCH = 100;
+
+    /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep
+    ///         or if the array exceeds MAX_CLAIM_BATCH.
     function claimMany(uint256[] calldata tokenIds) external nonReentrant {
+        if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
         _claimMany(msg.sender, tokenIds);
     }
 
     /// @notice NFT-contract-only facade for batch claim.
     function claimManyFor(address user, uint256[] calldata tokenIds) external nonReentrant {
         if (msg.sender != address(NFT)) revert NotNFT();
+        if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
         _claimMany(user, tokenIds);
     }
 
@@ -273,7 +281,10 @@ contract NFTRewardDistributor is ReentrancyGuard {
         lastActivityAt[tokenId] = block.timestamp;
 
         if (prevActive == 0 && tierPending[tier] > 0) {
-            accRewardPerSlot[tier] += (tierPending[tier] * ACC_PRECISION) / 1;
+            // activeInTier[tier] is exactly 1 here (we just incremented from 0),
+            // but use the array read explicitly for clarity and parity with
+            // onMintBatch's pending-release loop.
+            accRewardPerSlot[tier] += (tierPending[tier] * ACC_PRECISION) / activeInTier[tier];
             emit PendingReleased(tier, tierPending[tier]);
             tierPending[tier] = 0;
         }

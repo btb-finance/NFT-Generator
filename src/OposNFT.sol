@@ -7,6 +7,7 @@ import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
 import {IERC4906} from "@openzeppelin/contracts/interfaces/IERC4906.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -39,7 +40,7 @@ interface IRewardDistributorClaim {
  *      ERC-2981 royalties for marketplaces, ERC-4906 metadata-update events for
  *      live yield display, and per-token OPOS yield via the NFTRewardDistributor.
  */
-contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
+contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
     using Strings for uint256;
 
     uint256 private _tokenIdCounter = 1; // Start from 1, not 0
@@ -66,6 +67,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     }
 
     function setRenderer(address _renderer) external onlyOwner {
+        require(_renderer != address(0), "Renderer cannot be zero");
         renderer = IOposRenderer(_renderer);
     }
 
@@ -154,9 +156,10 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      * @dev Admin mint - FREE minting for owner only
      * @param amount Number of NFTs to mint (max 200 per transaction)
      */
-    function adminMint(uint256 amount) external onlyOwner {
+    function adminMint(uint256 amount) external onlyOwner nonReentrant {
         require(amount > 0 && amount <= 200, "Amount must be 1-200");
-        require(_tokenIdCounter + amount <= MAX_SUPPLY, "Exceeds max supply");
+        // The last id minted will be `_tokenIdCounter + amount - 1`; that must be ≤ MAX_SUPPLY.
+        require(_tokenIdCounter + amount - 1 <= MAX_SUPPLY, "Exceeds max supply");
 
         uint256[] memory ids = new uint256[](amount);
         for (uint256 i = 0; i < amount; i++) {
@@ -175,10 +178,11 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      *      Mints are still random — each recipient gets a fresh random NFT.
      * @param recipients Up to 500 addresses; each receives exactly one NFT.
      */
-    function giftNFT(address[] calldata recipients) external onlyOwner {
+    function giftNFT(address[] calldata recipients) external onlyOwner nonReentrant {
         uint256 len = recipients.length;
         require(len > 0 && len <= 500, "Recipients must be 1-500");
-        require(_tokenIdCounter + len <= MAX_SUPPLY, "Exceeds max supply");
+        // Last minted id must be ≤ MAX_SUPPLY.
+        require(_tokenIdCounter + len - 1 <= MAX_SUPPLY, "Exceeds max supply");
 
         uint256[] memory ids = new uint256[](len);
         for (uint256 i = 0; i < len; i++) {
@@ -188,7 +192,10 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
             uint256 traits = _generateTraits(tokenId);
             tokenTraits[tokenId] = traits;
             ids[i] = tokenId;
-            _safeMint(to, tokenId);
+            // Use _mint (no onERC721Received callback) so a single recipient
+            // contract that doesn't implement IERC721Receiver doesn't grief
+            // the entire airdrop. Owner is responsible for vetting recipients.
+            _mint(to, tokenId);
         }
         _notifyDistributor(ids);
     }
@@ -197,9 +204,10 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      * @dev Public buy function - Users buy NFTs with ETH
      * @param amount Number of NFTs to buy (max 500 per transaction)
      */
-    function buy(uint256 amount) external payable {
+    function buy(uint256 amount) external payable nonReentrant {
         require(amount > 0 && amount <= 500, "Amount must be 1-500");
-        require(_tokenIdCounter + amount <= MAX_SUPPLY, "Exceeds max supply");
+        // Last minted id must be ≤ MAX_SUPPLY.
+        require(_tokenIdCounter + amount - 1 <= MAX_SUPPLY, "Exceeds max supply");
 
         uint256 totalCost = mintPrice * amount;
         require(msg.value >= totalCost, "Insufficient ETH sent");
@@ -216,9 +224,12 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
 
         emit NFTPurchased(msg.sender, amount, totalCost);
 
-        // Refund excess ETH
+        // Refund excess ETH using call() instead of transfer() so smart-wallet
+        // / Safe / EIP-4337 buyers (whose receive() exceeds the 2300 gas stipend)
+        // can still receive their refund.
         if (msg.value > totalCost) {
-            payable(msg.sender).transfer(msg.value - totalCost);
+            (bool ok, ) = payable(msg.sender).call{value: msg.value - totalCost}("");
+            require(ok, "Refund failed");
         }
     }
 
@@ -237,7 +248,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      *      3=Rare, 4=Common. The distributor reads this to route rewards.
      */
     function tierIndexOf(uint256 tokenId) external view returns (uint8) {
-        require(ownerOf(tokenId) != address(0), "Token does not exist");
+        _requireOwned(tokenId); // reverts ERC721NonexistentToken on bad id
         return _getRarityIndex(tokenTraits[tokenId]);
     }
 
@@ -247,7 +258,10 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
     function withdraw() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No funds to withdraw");
-        payable(owner()).transfer(balance);
+        // Use call() so a Safe/multisig owner can receive ETH (transfer's 2300
+        // gas stipend is too tight for non-trivial receive() handlers).
+        (bool ok, ) = payable(owner()).call{value: balance}("");
+        require(ok, "Withdraw failed");
     }
 
     function _generateTraits(uint256 tokenId) private view returns (uint256) {
@@ -259,7 +273,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable {
      * @dev Build the on-chain JSON metadata: SVG image + traits + live OPOS yield.
      */
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        require(ownerOf(tokenId) != address(0), "Token does not exist");
+        _requireOwned(tokenId); // reverts ERC721NonexistentToken on bad id
 
         string memory svg = renderer.buildArt(tokenTraits[tokenId]);
         string memory rarity = _getRarityTier(tokenTraits[tokenId]);
