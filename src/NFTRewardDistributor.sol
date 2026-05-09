@@ -76,6 +76,8 @@ contract NFTRewardDistributor is ReentrancyGuard {
     event PendingReleased(uint8 indexed tier, uint256 amount);
     event Reaped(address indexed reaper, uint256 indexed tokenId, uint256 amount);
     event Woke(address indexed owner, uint256 indexed tokenId);
+    event MetadataUpdateFailed(uint256 indexed tokenId);
+    event BatchMetadataUpdateFailed();
 
     error NotNFTOwner();
     error NotNFT();
@@ -85,6 +87,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     error NotAsleep();
     error NotStaleYet();
     error BatchTooLarge();
+    error EmptyBatch();
 
     constructor(address rewardToken, address nft) {
         if (rewardToken == address(0) || nft == address(0)) revert ZeroAddress();
@@ -169,6 +172,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice Claim multiple tokenIds in one call. Reverts if any is asleep
     ///         or if the array exceeds MAX_CLAIM_BATCH.
     function claimMany(uint256[] calldata tokenIds) external nonReentrant {
+        if (tokenIds.length == 0) revert EmptyBatch();
         if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
         _claimMany(msg.sender, tokenIds);
     }
@@ -176,6 +180,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice NFT-contract-only facade for batch claim.
     function claimManyFor(address user, uint256[] calldata tokenIds) external nonReentrant {
         if (msg.sender != address(NFT)) revert NotNFT();
+        if (tokenIds.length == 0) revert EmptyBatch();
         if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
         _claimMany(user, tokenIds);
     }
@@ -245,11 +250,11 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (activeInTier[tier] > 0) {
             unchecked { activeInTier[tier] -= 1; }
         }
+        _tryEmitMetadataUpdate(tokenId);
         if (owed > 0) {
             lifetimeClaimed[tokenId] += owed;
             lastBalance -= owed;
             REWARD_TOKEN.safeTransfer(msg.sender, owed);
-            _tryEmitMetadataUpdate(tokenId);
             emit Reaped(msg.sender, tokenId, owed);
         }
     }
@@ -336,8 +341,8 @@ contract NFTRewardDistributor is ReentrancyGuard {
         uint256 newRewards = currentBalance - lastBalance;
         lastBalance = currentBalance;
 
+        uint256 share = (newRewards * TIER_BPS) / BPS_DENOMINATOR;
         for (uint8 t; t < TIERS; ++t) {
-            uint256 share = (newRewards * TIER_BPS) / BPS_DENOMINATOR;
             if (activeInTier[t] > 0) {
                 accRewardPerSlot[t] += (share * ACC_PRECISION) / activeInTier[t];
             } else {
@@ -359,10 +364,14 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     function _tryEmitMetadataUpdate(uint256 tokenId) internal {
-        try IMetadataUpdateHook(address(NFT)).emitMetadataUpdate(tokenId) {} catch {}
+        try IMetadataUpdateHook(address(NFT)).emitMetadataUpdate(tokenId) {} catch {
+            emit MetadataUpdateFailed(tokenId);
+        }
     }
 
     function _tryEmitBatchMetadataUpdate() internal {
-        try IMetadataUpdateHook(address(NFT)).emitBatchMetadataUpdate() {} catch {}
+        try IMetadataUpdateHook(address(NFT)).emitBatchMetadataUpdate() {} catch {
+            emit BatchMetadataUpdateFailed();
+        }
     }
 }

@@ -59,6 +59,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
     event MintPriceUpdated(uint256 newPrice);
     event NFTPurchased(address indexed buyer, uint256 amount, uint256 totalCost);
     event DistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
+    event RefundFailed(address indexed buyer, uint256 amount);
 
     constructor(address _renderer) ERC721("OPOSSUM NFT", "OPOSN") Ownable(msg.sender) {
         renderer = IOposRenderer(_renderer);
@@ -77,6 +78,8 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
      *      emit ERC-4906 metadata-update events through this contract.
      */
     function setDistributor(address _distributor) external onlyOwner {
+        require(_distributor != address(0), "Distributor cannot be zero");
+        require(_tokenIdCounter == 1, "Cannot change distributor after minting begins");
         address old = address(distributor);
         distributor = IRewardDistributorView(_distributor);
         emit DistributorUpdated(old, _distributor);
@@ -170,6 +173,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
             _safeMint(msg.sender, tokenId);
         }
         _notifyDistributor(ids);
+        emit BatchMetadataUpdate(ids[0], ids[ids.length - 1]);
     }
 
     /**
@@ -198,6 +202,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
             _mint(to, tokenId);
         }
         _notifyDistributor(ids);
+        emit BatchMetadataUpdate(ids[0], ids[ids.length - 1]);
     }
 
     /**
@@ -205,7 +210,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
      * @param amount Number of NFTs to buy (max 500 per transaction)
      */
     function buy(uint256 amount) external payable nonReentrant {
-        require(amount > 0 && amount <= 500, "Amount must be 1-500");
+        require(amount > 0 && amount <= 300, "Amount must be 1-300");
         // Last minted id must be ≤ MAX_SUPPLY.
         require(_tokenIdCounter + amount - 1 <= MAX_SUPPLY, "Exceeds max supply");
 
@@ -221,15 +226,16 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
             _safeMint(msg.sender, tokenId);
         }
         _notifyDistributor(ids);
+        emit BatchMetadataUpdate(ids[0], ids[ids.length - 1]);
 
         emit NFTPurchased(msg.sender, amount, totalCost);
 
-        // Refund excess ETH using call() instead of transfer() so smart-wallet
-        // / Safe / EIP-4337 buyers (whose receive() exceeds the 2300 gas stipend)
-        // can still receive their refund.
+        // Refund excess ETH. We do not revert on failure — a reverting receive()
+        // on the buyer's side must not undo the entire mint. The buyer can recover
+        // excess ETH by other means; their NFTs are already minted.
         if (msg.value > totalCost) {
             (bool ok, ) = payable(msg.sender).call{value: msg.value - totalCost}("");
-            require(ok, "Refund failed");
+            if (!ok) emit RefundFailed(msg.sender, msg.value - totalCost);
         }
     }
 
@@ -328,7 +334,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
 
     function _decimalPart(uint256 n, uint256 unit) private pure returns (string memory) {
         uint256 integerPart = n / unit;
-        uint256 oneDecimal = (n % unit) / (unit / 10);
+        uint256 oneDecimal = (n % unit) * 10 / unit;
         if (oneDecimal == 0) return integerPart.toString();
         return string(abi.encodePacked(integerPart.toString(), ".", oneDecimal.toString()));
     }
@@ -567,6 +573,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
      * @param feeNumerator Fee in basis points (500 = 5%)
      */
     function setDefaultRoyalty(address receiver, uint96 feeNumerator) external onlyOwner {
+        require(feeNumerator <= 500, "Royalty cannot exceed 5%");
         _setDefaultRoyalty(receiver, feeNumerator);
     }
 
