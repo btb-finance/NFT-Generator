@@ -210,7 +210,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
      * @param amount Number of NFTs to buy (max 500 per transaction)
      */
     function buy(uint256 amount) external payable nonReentrant {
-        require(amount > 0 && amount <= 300, "Amount must be 1-300");
+        require(amount > 0 && amount <= 500, "Amount must be 1-500");
         // Last minted id must be ≤ MAX_SUPPLY.
         require(_tokenIdCounter + amount - 1 <= MAX_SUPPLY, "Exceeds max supply");
 
@@ -287,7 +287,7 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
             '{"name":"OPOSSUM ', rarity, ' #', tokenId.toString(), '",',
             '"description":"88,888 fully on-chain OPOSSUM NFTs. Every holder earns a 1/88,888 share of every OPOS transfer tax in real time, claimable on demand.",',
             '"attributes":[',
-            _getAttributes(tokenTraits[tokenId]),
+            _getAttributes(tokenId, tokenTraits[tokenId]),
             ',',
             _getYieldAttributes(tokenId),
             '],',
@@ -339,10 +339,10 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
         return string(abi.encodePacked(integerPart.toString(), ".", oneDecimal.toString()));
     }
 
-    function _getAttributes(uint256 seed) private view returns (string memory) {
+    function _getAttributes(uint256 tokenId, uint256 seed) private pure returns (string memory) {
         return string(abi.encodePacked(
             '{"trait_type":"Rarity","value":"', _getRarityTier(seed), '"},',
-            '{"trait_type":"Generation","value":"', _getGeneration(), '"},',
+            '{"trait_type":"Generation","value":"', _getGeneration(tokenId), '"},',
             '{"trait_type":"Body","value":"', _getBodyName(seed), '"},',
             '{"trait_type":"Eyes","value":"', _getEyeName(seed), '"},',
             '{"trait_type":"Expression","value":"', _getExpressionName(seed), '"},',
@@ -353,19 +353,20 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Get generation based on total minted supply
-     * Genesis: 0-17,777 (20% = first 17,777 NFTs)
-     * Alpha: 17,778-35,555 (20% = next 17,777 NFTs)
-     * Beta: 35,556-53,332 (20% = next 17,777 NFTs)
-     * Gamma: 53,333-71,110 (20% = next 17,777 NFTs)
-     * Delta: 71,111-88,888 (20% = last 17,778 NFTs)
+     * @dev Generation is a permanent, per-token badge fixed by mint order
+     *      (the token's own id), NOT by current collection supply — so it
+     *      never changes after mint and differs across early/late tokens.
+     * Genesis: 1-17,777 (first 17,777 NFTs)
+     * Alpha: 17,778-35,555 (next 17,777 NFTs)
+     * Beta: 35,556-53,332 (next 17,777 NFTs)
+     * Gamma: 53,333-71,110 (next 17,777 NFTs)
+     * Delta: 71,111-88,888 (last 17,778 NFTs)
      */
-    function _getGeneration() private view returns (string memory) {
-        uint256 supply = _tokenIdCounter;
-        if (supply <= 17777) return "Genesis";
-        if (supply <= 35555) return "Alpha";
-        if (supply <= 53332) return "Beta";
-        if (supply <= 71110) return "Gamma";
+    function _getGeneration(uint256 tokenId) private pure returns (string memory) {
+        if (tokenId <= 17777) return "Genesis";
+        if (tokenId <= 35555) return "Alpha";
+        if (tokenId <= 53332) return "Beta";
+        if (tokenId <= 71110) return "Gamma";
         return "Delta";
     }
 
