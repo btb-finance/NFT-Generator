@@ -40,13 +40,16 @@ contract OposRenderer {
     }
 
     /**
-     * @dev Draws a front-facing opossum: rounded head with pointy ears (pink inner),
-     *      white face mask narrowing to a triangular snout, pink nose at the tip,
-     *      a chunky body with lighter belly, pink feet, and a long curving tail.
+     * @dev Draws a front-facing chibi opossum as one cohesive rounded silhouette.
+     *      Technique: paint the full black body shape first, then paint the
+     *      body-color fill inset 1px on every side so a clean 1px outline is
+     *      left automatically. Then layer the cream belly, white face mask,
+     *      expression-driven eyes, pink nose, blush, pattern and accessory.
+     *      Pointy pink-lined ears up top; a hairless tail curls off the body.
      */
     function _drawOpossum(uint256 seed) private pure returns (string memory) {
-        string memory bodyColor = _getBodyColor(seed);
-        string memory shade = _adjustBrightness(bodyColor, -30);
+        string memory body = _getBodyColor(seed);
+        string memory shade = _adjustBrightness(body, -30);
         string memory eyeColor = _getEyeColor(seed);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint8 expression = uint8((seed >> 8) % 10);
@@ -55,88 +58,84 @@ contract OposRenderer {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint8 accessory = uint8((seed >> 24) % 15);
 
-        string memory out = "";
+        // ── Tail first, so the body silhouette tucks over its base ──
+        string memory out = _drawTail(body);
 
-        // ── Pointy ears with pink inner ──
+        // ── Black silhouette: ears + one rounded head→body shape ──
         out = string(abi.encodePacked(out,
-            _pixel(7, 2, "#000"), _pixel(8, 2, "#000"),
-            _pixel(7, 3, "#000"), _pixel(8, 3, "#FFC0CB"),
-            _pixel(7, 4, "#000"), _pixel(8, 4, "#FFC0CB"),
-            _pixel(15, 2, "#000"), _pixel(16, 2, "#000"),
-            _pixel(15, 3, "#FFC0CB"), _pixel(16, 3, "#000"),
-            _pixel(15, 4, "#FFC0CB"), _pixel(16, 4, "#000")
+            // ears (outer)
+            _pixel(8, 2, "#000"), _rect(7, 3, 3, 2, "#000"),
+            _pixel(15, 2, "#000"), _rect(14, 3, 3, 2, "#000")
+        ));
+        out = string(abi.encodePacked(out,
+            // head outline, rows 4-12 (rounded, gentle neck pinch)
+            _rect(9, 4, 6, 1, "#000"),
+            _rect(8, 5, 8, 1, "#000"),
+            _rect(7, 6, 10, 2, "#000"),
+            _rect(6, 8, 12, 3, "#000"),
+            _rect(7, 11, 10, 1, "#000"),
+            _rect(8, 12, 8, 1, "#000")
+        ));
+        out = string(abi.encodePacked(out,
+            // body outline, rows 13-20
+            _rect(7, 13, 10, 1, "#000"),
+            _rect(6, 14, 12, 1, "#000"),
+            _rect(5, 15, 14, 3, "#000"),
+            _rect(6, 18, 12, 1, "#000"),
+            _rect(7, 19, 10, 1, "#000"),
+            _rect(9, 20, 6, 1, "#000")
         ));
 
-        // ── Head outline (trapezoidal: wide top, narrowing to snout) ──
+        // ── Body-color fill, inset 1px → leaves the black outline showing ──
         out = string(abi.encodePacked(out,
-            _rect(6, 4, 12, 1, "#000"),    // top edge
-            _rect(6, 4, 1, 5, "#000"),     // upper-left side
-            _rect(17, 4, 1, 5, "#000"),    // upper-right side
-            _pixel(7, 9, "#000"),  _pixel(16, 9, "#000"),
-            _pixel(8, 10, "#000"), _pixel(15, 10, "#000"),
-            _pixel(9, 11, "#000"), _pixel(14, 11, "#000"),
-            _pixel(10, 12, "#000"), _pixel(13, 12, "#000")
+            _rect(9, 5, 6, 1, body),
+            _rect(8, 6, 8, 2, body),
+            _rect(7, 8, 10, 3, body),
+            _rect(8, 11, 8, 1, body),
+            _rect(9, 12, 6, 1, body)
+        ));
+        out = string(abi.encodePacked(out,
+            _rect(8, 13, 8, 1, body),
+            _rect(7, 14, 10, 1, body),
+            _rect(6, 15, 12, 2, body),
+            _rect(7, 17, 10, 1, body),
+            _rect(8, 18, 8, 1, body),
+            _rect(9, 19, 6, 1, body)
         ));
 
-        // ── Head fill (body color) ──
+        // ── Pink inner ears ──
         out = string(abi.encodePacked(out,
-            _rect(7, 4, 10, 5, bodyColor),
-            _rect(8, 9, 8, 1, bodyColor),
-            _rect(9, 10, 6, 1, bodyColor),
-            _rect(10, 11, 4, 1, bodyColor)
+            _pixel(8, 3, "#FFC0CB"), _pixel(8, 4, "#FFC0CB"),
+            _pixel(15, 3, "#FFC0CB"), _pixel(15, 4, "#FFC0CB")
         ));
 
-        // ── White face mask (the iconic opossum look) ──
+        // ── Soft cream belly (rounded, not a hard rectangle) ──
         out = string(abi.encodePacked(out,
-            _rect(8, 6, 8, 3, "#FFFFFF"),
-            _rect(9, 9, 6, 1, "#FFFFFF"),
-            _rect(10, 10, 4, 1, "#FFFFFF"),
-            _rect(11, 11, 2, 1, "#FFFFFF")
+            _rect(9, 15, 6, 2, "#FFF6E9"),
+            _rect(10, 17, 4, 1, "#FFF6E9")
         ));
 
-        // ── Pink nose at snout tip ──
+        // ── White face mask (the iconic opossum look), rounded ──
         out = string(abi.encodePacked(out,
-            _pixel(11, 12, "#FF1493"),
-            _pixel(12, 12, "#FF1493")
+            _rect(9, 7, 6, 1, "#FFFFFF"),
+            _rect(8, 8, 8, 2, "#FFFFFF"),
+            _rect(9, 10, 6, 1, "#FFFFFF"),
+            _rect(10, 11, 4, 1, "#FFFFFF")
         ));
 
         // ── Eyes (driven by expression) ──
         out = string(abi.encodePacked(out, _drawEyes(expression, eyeColor)));
 
-        // ── Shoulders: wider connector that bridges narrow snout to body ──
+        // ── Pink nose + rosy blush on the cheeks ──
         out = string(abi.encodePacked(out,
-            _rect(7, 12, 3, 1, bodyColor), _rect(13, 12, 4, 1, bodyColor),
-            _pixel(7, 12, "#000"), _pixel(16, 12, "#000")
+            _pixel(11, 11, "#FF6FA5"), _pixel(12, 11, "#FF6FA5"),
+            _pixel(8, 10, "#FFB6C1"), _pixel(15, 10, "#FFB6C1")
         ));
 
-        // ── Body outline + fill ──
+        // ── Little pink feet ──
         out = string(abi.encodePacked(out,
-            _rect(5, 13, 14, 1, "#000"),   // top
-            _rect(5, 19, 14, 1, "#000"),   // bottom
-            _rect(5, 13, 1, 7, "#000"),    // left
-            _rect(18, 13, 1, 7, "#000"),   // right
-            _rect(6, 14, 12, 5, bodyColor) // fill
-        ));
-
-        // ── Lighter belly (the white underside) ──
-        out = string(abi.encodePacked(out,
-            _rect(8, 15, 8, 3, "#F5F5F5")
-        ));
-
-        // ── Pink feet peeking out at the bottom ──
-        out = string(abi.encodePacked(out,
-            _rect(6, 19, 2, 1, "#FFC0CB"),
-            _rect(10, 19, 2, 1, "#FFC0CB"),
-            _rect(14, 19, 2, 1, "#FFC0CB"),
-            _rect(16, 19, 2, 1, "#FFC0CB")
-        ));
-
-        // ── Long curving hairless tail (pink-tipped) ──
-        out = string(abi.encodePacked(out,
-            _pixel(19, 16, "#000"), _pixel(19, 17, bodyColor), _pixel(19, 18, "#000"),
-            _pixel(20, 15, "#000"), _pixel(20, 16, bodyColor),
-            _pixel(21, 14, "#000"), _pixel(21, 15, bodyColor),
-            _pixel(22, 13, "#000"), _pixel(22, 14, "#FFC0CB"), _pixel(22, 15, "#000")
+            _pixel(9, 20, "#FFC0CB"), _pixel(10, 20, "#FFC0CB"),
+            _pixel(13, 20, "#FFC0CB"), _pixel(14, 20, "#FFC0CB")
         ));
 
         // ── Pattern overlay ──
@@ -148,74 +147,91 @@ contract OposRenderer {
         return out;
     }
 
+    /**
+     * @dev Hairless prehensile tail: body-color base fading to a pink tip,
+     *      curling out from the lower-right of the body and hooking upward.
+     *      Drawn before the body so the base sits behind the silhouette.
+     */
+    function _drawTail(string memory body) private pure returns (string memory) {
+        // black underside / outline
+        string memory t = string(abi.encodePacked(
+            _pixel(18, 18, "#000"), _pixel(19, 18, "#000"),
+            _pixel(20, 17, "#000"), _pixel(21, 17, "#000"),
+            _pixel(22, 16, "#000"), _pixel(22, 15, "#000")
+        ));
+        t = string(abi.encodePacked(t,
+            _pixel(22, 14, "#000"), _pixel(21, 13, "#000"), _pixel(20, 13, "#000")
+        ));
+        // colored fill on top: body-color base → pink hairless tip
+        return string(abi.encodePacked(t,
+            _pixel(18, 17, body), _pixel(19, 17, body),
+            _pixel(20, 16, body), _pixel(21, 16, "#FFC0CB"),
+            _pixel(21, 15, "#FFC0CB"), _pixel(21, 14, "#FFC0CB"),
+            _pixel(20, 14, "#FFB6C1")
+        ));
+    }
+
     function _drawEyes(uint8 expression, string memory eyeColor) private pure returns (string memory) {
-        // Eye region: cols 9-10 (left) and 13-14 (right), rows 7-8.
+        // Eye region: cols 8-9 (left) and 14-15 (right), rows 8-9, on the mask.
         if (expression == 0) {
-            // Happy — closed curves with raised brows
+            // Happy — upward closed arcs
             return string(abi.encodePacked(
-                _rect(9, 7, 2, 1, "#000"), _rect(13, 7, 2, 1, "#000"),
-                _pixel(9, 6, "#000"), _pixel(14, 6, "#000")
+                _rect(8, 9, 2, 1, "#000"), _pixel(9, 8, "#000"),
+                _rect(14, 9, 2, 1, "#000"), _pixel(14, 8, "#000")
             ));
         } else if (expression == 1) {
-            // Sleepy — single line eyes
+            // Sleepy — flat half-closed lines
             return string(abi.encodePacked(
-                _rect(9, 8, 2, 1, "#000"),
-                _rect(13, 8, 2, 1, "#000")
+                _rect(8, 9, 2, 1, "#000"),
+                _rect(14, 9, 2, 1, "#000")
             ));
         } else if (expression == 2) {
-            // Winking — one open, one closed
+            // Winking — left closed, right open & sparkly
             return string(abi.encodePacked(
-                _rect(9, 7, 2, 2, eyeColor),
-                _pixel(9, 7, "#FFFFFF"),
-                _rect(13, 8, 2, 1, "#000")
+                _rect(8, 9, 2, 1, "#000"),
+                _rect(14, 8, 2, 2, "#000"), _pixel(14, 8, "#FFFFFF")
             ));
         } else if (expression == 3) {
-            // Surprised — wide round
+            // Surprised — wide round with lower sparkle
             return string(abi.encodePacked(
-                _rect(9, 7, 2, 2, "#000"),
-                _rect(13, 7, 2, 2, "#000"),
-                _pixel(9, 7, "#FFFFFF"), _pixel(13, 7, "#FFFFFF")
+                _rect(8, 8, 2, 2, "#000"), _rect(14, 8, 2, 2, "#000"),
+                _pixel(9, 9, "#FFFFFF"), _pixel(15, 9, "#FFFFFF")
             ));
         } else if (expression == 4) {
-            // Grumpy — angled brows
+            // Grumpy — angled brows over narrow eyes
             return string(abi.encodePacked(
-                _rect(9, 8, 2, 1, "#000"),
-                _rect(13, 8, 2, 1, "#000"),
-                _pixel(8, 6, "#000"), _pixel(10, 7, "#000"),
-                _pixel(13, 7, "#000"), _pixel(15, 6, "#000")
+                _rect(8, 9, 2, 1, "#000"), _rect(14, 9, 2, 1, "#000"),
+                _pixel(8, 8, "#000"), _pixel(15, 8, "#000")
             ));
         } else if (expression == 5) {
-            // Loving — pink hearts
+            // Loving — pink hearts for eyes
             return string(abi.encodePacked(
-                _pixel(9, 7, "#FF1493"), _pixel(10, 7, "#FF1493"),
-                _pixel(13, 7, "#FF1493"), _pixel(14, 7, "#FF1493"),
-                _pixel(9, 8, "#FF1493"), _pixel(13, 8, "#FF1493")
+                _pixel(8, 8, "#FF1493"), _pixel(9, 8, "#FF1493"), _pixel(8, 9, "#FF1493"),
+                _pixel(14, 8, "#FF1493"), _pixel(15, 8, "#FF1493"), _pixel(15, 9, "#FF1493")
             ));
         } else if (expression == 6) {
-            // Excited — bright wide eyes
+            // Excited — big bright iris eyes
             return string(abi.encodePacked(
-                _rect(9, 7, 2, 2, eyeColor),
-                _rect(13, 7, 2, 2, eyeColor),
-                _pixel(9, 7, "#FFFFFF"), _pixel(13, 7, "#FFFFFF")
+                _rect(8, 8, 2, 2, eyeColor), _rect(14, 8, 2, 2, eyeColor),
+                _pixel(8, 8, "#FFFFFF"), _pixel(14, 8, "#FFFFFF")
             ));
         } else if (expression == 7) {
-            // Shy — half-closed
+            // Shy — soft half-closed iris lines
             return string(abi.encodePacked(
-                _rect(9, 8, 2, 1, eyeColor),
-                _rect(13, 8, 2, 1, eyeColor)
+                _rect(8, 9, 2, 1, eyeColor),
+                _rect(14, 9, 2, 1, eyeColor)
             ));
         } else if (expression == 8) {
-            // Curious — one raised brow
+            // Curious — one wide, one narrow
             return string(abi.encodePacked(
-                _rect(9, 7, 2, 1, "#000"),
-                _rect(13, 7, 2, 1, "#000"),
-                _pixel(8, 6, "#000"), _pixel(9, 6, "#000")
+                _rect(8, 8, 2, 2, "#000"), _pixel(8, 8, "#FFFFFF"),
+                _rect(14, 9, 2, 1, "#000")
             ));
         }
-        // Normal — small beady eyes
+        // Normal — big round sparkly eyes
         return string(abi.encodePacked(
-            _pixel(9, 7, "#000"), _pixel(10, 7, "#000"),
-            _pixel(13, 7, "#000"), _pixel(14, 7, "#000")
+            _rect(8, 8, 2, 2, "#1A1A1A"), _rect(14, 8, 2, 2, "#1A1A1A"),
+            _pixel(8, 8, "#FFFFFF"), _pixel(14, 8, "#FFFFFF")
         ));
     }
 
@@ -311,14 +327,14 @@ contract OposRenderer {
                 _pixel(6, 5, "#FF0000"), _pixel(17, 5, "#FF0000")
             ));
         } else if (accessory == 6) {
-            // Astronaut Helmet — silver frame around the head with a glass shine
-            // highlight. No fill, so the face stays fully visible underneath.
+            // Astronaut Helmet — silver frame that hugs the rounded head with a
+            // glass shine highlight. No fill, so the face stays visible underneath.
             return string(abi.encodePacked(
-                _rect(6, 3, 12, 1, "#C0C0C0"),
-                _rect(5, 4, 1, 9, "#C0C0C0"),
-                _rect(18, 4, 1, 9, "#C0C0C0"),
-                _pixel(7, 4, "#FFFFFF"),
-                _pixel(6, 5, "#FFFFFF")
+                _rect(8, 3, 8, 1, "#C0C0C0"),                 // dome top
+                _pixel(7, 4, "#C0C0C0"), _pixel(16, 4, "#C0C0C0"),
+                _pixel(6, 5, "#C0C0C0"), _pixel(17, 5, "#C0C0C0"),
+                _rect(5, 6, 1, 5, "#C0C0C0"), _rect(18, 6, 1, 5, "#C0C0C0"),
+                _pixel(8, 4, "#FFFFFF"), _pixel(7, 5, "#FFFFFF") // glass shine
             ));
         } else if (accessory == 7) {
             // Pirate Eye Patch
@@ -439,9 +455,10 @@ contract OposRenderer {
     }
 
     function _adjustBrightness(string memory /* color */, int8 /* adjustment */) private pure returns (string memory) {
-        // Simplified shade — returns a fixed darker accent that contrasts
-        // with most body colors. Used for stripes/spots/patches.
-        return "#5C4033";
+        // Translucent black overlay: darkens whatever body color sits beneath
+        // it, so stripes/spots/patches always read as a shade of the body
+        // rather than a fixed, clashing brown. SVG fill supports rgba().
+        return "rgba(0,0,0,0.28)";
     }
 
     function _pixel(uint256 x, uint256 y, string memory color) private pure returns (string memory) {
