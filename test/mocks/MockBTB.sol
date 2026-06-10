@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.34;
+
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
+/// @notice Plain ERC20 standing in for the BTB token that backs OPOSSUM.
+contract MockBTB is ERC20 {
+    constructor() ERC20("Mock BTB", "mBTB") {}
+
+    function mintTo(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}

@@ -171,8 +171,22 @@ contract OposRenderer {
         ));
     }
 
+    /// @dev One 2x2 "round eye" at (x,y): white sparkle, colored iris (the eye
+    ///      trait), and a dark pupil. The pupil guarantees the eye is visible on
+    ///      the white face for ANY iris color, while the iris shows the trait.
+    function _eye(uint256 x, uint256 y, string memory iris) private pure returns (string memory) {
+        return string(abi.encodePacked(
+            _pixel(x, y, "#FFFFFF"),          // sparkle / highlight
+            _pixel(x + 1, y, iris),           // iris
+            _pixel(x, y + 1, iris),           // iris
+            _pixel(x + 1, y + 1, "#1A1A1A")   // pupil
+        ));
+    }
+
     function _drawEyes(uint8 expression, string memory eyeColor) private pure returns (string memory) {
         // Eye region: cols 8-9 (left) and 14-15 (right), rows 8-9, on the mask.
+        // Open-eyed expressions render the iris in the token's eye-color trait;
+        // closed/stylized ones (Happy, Sleepy, Loving) stay monochrome by design.
         if (expression == 0) {
             // Happy — upward closed arcs
             return string(abi.encodePacked(
@@ -186,52 +200,51 @@ contract OposRenderer {
                 _rect(14, 9, 2, 1, "#000")
             ));
         } else if (expression == 2) {
-            // Winking — left closed, right open & sparkly
+            // Winking — left closed, right open iris eye
             return string(abi.encodePacked(
                 _rect(8, 9, 2, 1, "#000"),
-                _rect(14, 8, 2, 2, "#000"), _pixel(14, 8, "#FFFFFF")
+                _eye(14, 8, eyeColor)
             ));
         } else if (expression == 3) {
-            // Surprised — wide round with lower sparkle
+            // Surprised — wide round iris eyes
             return string(abi.encodePacked(
-                _rect(8, 8, 2, 2, "#000"), _rect(14, 8, 2, 2, "#000"),
-                _pixel(9, 9, "#FFFFFF"), _pixel(15, 9, "#FFFFFF")
+                _eye(8, 8, eyeColor), _eye(14, 8, eyeColor)
             ));
         } else if (expression == 4) {
-            // Grumpy — angled brows over narrow eyes
+            // Grumpy — iris eyes under dark angled brows
             return string(abi.encodePacked(
-                _rect(8, 9, 2, 1, "#000"), _rect(14, 9, 2, 1, "#000"),
-                _pixel(8, 8, "#000"), _pixel(15, 8, "#000")
+                _rect(8, 9, 2, 1, eyeColor), _rect(14, 9, 2, 1, eyeColor),
+                _pixel(8, 8, "#000"), _pixel(15, 8, "#000"),
+                _pixel(9, 9, "#1A1A1A"), _pixel(14, 9, "#1A1A1A")
             ));
         } else if (expression == 5) {
-            // Loving — pink hearts for eyes
+            // Loving — heart eyes. Bright top + dark crimson bottom point gives
+            // contrast so they read even on a pink body/face (not pink-on-pink).
             return string(abi.encodePacked(
-                _pixel(8, 8, "#FF1493"), _pixel(9, 8, "#FF1493"), _pixel(8, 9, "#FF1493"),
-                _pixel(14, 8, "#FF1493"), _pixel(15, 8, "#FF1493"), _pixel(15, 9, "#FF1493")
+                _pixel(8, 8, "#FF4D8D"), _pixel(9, 8, "#FF4D8D"), _pixel(8, 9, "#B0144E"),
+                _pixel(14, 8, "#FF4D8D"), _pixel(15, 8, "#FF4D8D"), _pixel(15, 9, "#B0144E")
             ));
         } else if (expression == 6) {
             // Excited — big bright iris eyes
             return string(abi.encodePacked(
-                _rect(8, 8, 2, 2, eyeColor), _rect(14, 8, 2, 2, eyeColor),
-                _pixel(8, 8, "#FFFFFF"), _pixel(14, 8, "#FFFFFF")
+                _eye(8, 8, eyeColor), _eye(14, 8, eyeColor)
             ));
         } else if (expression == 7) {
-            // Shy — soft half-closed iris lines
+            // Shy — soft half-closed iris lines with a dark outer anchor
             return string(abi.encodePacked(
-                _rect(8, 9, 2, 1, eyeColor),
-                _rect(14, 9, 2, 1, eyeColor)
+                _pixel(8, 9, "#2A2A2A"), _pixel(9, 9, eyeColor),
+                _pixel(14, 9, eyeColor), _pixel(15, 9, "#2A2A2A")
             ));
         } else if (expression == 8) {
-            // Curious — one wide, one narrow
+            // Curious — one wide iris eye, one narrow
             return string(abi.encodePacked(
-                _rect(8, 8, 2, 2, "#000"), _pixel(8, 8, "#FFFFFF"),
-                _rect(14, 9, 2, 1, "#000")
+                _eye(8, 8, eyeColor),
+                _pixel(14, 9, "#1A1A1A"), _pixel(15, 9, eyeColor)
             ));
         }
-        // Normal — big round sparkly eyes
+        // Normal — big round iris eyes
         return string(abi.encodePacked(
-            _rect(8, 8, 2, 2, "#1A1A1A"), _rect(14, 8, 2, 2, "#1A1A1A"),
-            _pixel(8, 8, "#FFFFFF"), _pixel(14, 8, "#FFFFFF")
+            _eye(8, 8, eyeColor), _eye(14, 8, eyeColor)
         ));
     }
 
@@ -269,11 +282,15 @@ contract OposRenderer {
             // Gradient — darker bottom band
             return _rect(6, 18, 12, 1, shade);
         } else if (pattern == 7) {
-            // Calico — multi-color patches
+            // Calico — tri-tonal fur patches on the flanks. Translucent so they
+            // tint the body color underneath (harmonize with any body, never a
+            // clashing solid block), and kept off the belly.
             return string(abi.encodePacked(
-                _rect(7, 14, 3, 2, "#FF8C42"),
-                _rect(14, 16, 3, 2, "#2C2C2C"),
-                _rect(10, 18, 3, 1, "#FFFFFF")
+                _pixel(6, 14, "rgba(232,145,60,0.50)"), _pixel(7, 14, "rgba(232,145,60,0.50)"),
+                _pixel(7, 13, "rgba(232,145,60,0.50)"), _pixel(6, 15, "rgba(232,145,60,0.50)"),
+                _pixel(15, 14, "rgba(0,0,0,0.32)"), _pixel(16, 14, "rgba(0,0,0,0.32)"),
+                _pixel(16, 15, "rgba(0,0,0,0.32)"),
+                _pixel(7, 17, "rgba(255,255,255,0.45)"), _pixel(8, 17, "rgba(255,255,255,0.45)")
             ));
         } else if (pattern == 8) {
             // Galaxy Swirl — scattered cosmic specks
@@ -321,10 +338,12 @@ contract OposRenderer {
                 _rect(11, 7, 2, 1, "#000")
             ));
         } else if (accessory == 5) {
-            // Bandana around the head
+            // Bandana — headband across the forehead (within head width) with a
+            // knot and trailing tails down the left side.
             return string(abi.encodePacked(
-                _rect(7, 4, 10, 1, "#FF0000"),
-                _pixel(6, 5, "#FF0000"), _pixel(17, 5, "#FF0000")
+                _rect(8, 5, 8, 1, "#E74C3C"),
+                _pixel(7, 5, "#E74C3C"),                       // knot
+                _pixel(6, 6, "#E74C3C"), _pixel(6, 7, "#C0392B") // tails
             ));
         } else if (accessory == 6) {
             // Astronaut Helmet — silver frame that hugs the rounded head with a
@@ -370,17 +389,22 @@ contract OposRenderer {
                 _pixel(14, 8, eyeColor)
             ));
         } else if (accessory == 12) {
-            // Cape — red fabric peeking out from the sides + collar
+            // Cape — split collar resting on the shoulders (clear of the face)
+            // with the fabric draping behind the body and pooling/flaring out at
+            // the lower corners (not floating).
             return string(abi.encodePacked(
-                _rect(3, 13, 2, 7, "#B22222"),
-                _rect(19, 13, 2, 7, "#B22222"),
-                _rect(7, 12, 10, 1, "#B22222")
+                _rect(7, 13, 3, 1, "#B22222"), _rect(14, 13, 3, 1, "#B22222"), // shoulders
+                _pixel(5, 16, "#B22222"), _pixel(5, 17, "#B22222"),
+                _rect(4, 18, 2, 1, "#B22222"), _rect(3, 19, 3, 1, "#8B1A1A"),
+                _pixel(18, 16, "#B22222"), _pixel(18, 17, "#B22222"),
+                _rect(18, 18, 2, 1, "#B22222"), _rect(18, 19, 3, 1, "#8B1A1A")
             ));
         } else if (accessory == 13) {
-            // Halo — thin golden ring floating above the head
+            // Halo — thin golden oval ring floating above the head (open center).
             return string(abi.encodePacked(
-                _rect(9, 1, 6, 1, "#FFD700"),
-                _pixel(8, 1, "#FFD700"), _pixel(15, 1, "#FFD700")
+                _rect(10, 0, 4, 1, "#FFD700"),                      // top arc
+                _pixel(9, 1, "#FFE680"), _pixel(14, 1, "#FFE680"),  // sides
+                _pixel(10, 2, "#FFD700"), _pixel(13, 2, "#FFD700")  // bottom arc
             ));
         } else if (accessory == 14) {
             // Headphones — black band over the head with ear cups

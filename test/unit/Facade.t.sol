@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import {TestBase} from "../helpers/TestBase.sol";
+import {OposNFT} from "../../src/OposNFT.sol";
 import {NFTRewardDistributor} from "../../src/NFTRewardDistributor.sol";
 
 /// @notice Tests the NFT-side facade: users who only know the NFT contract
@@ -79,20 +80,23 @@ contract FacadeTest is TestBase {
     }
 
     function test_facade_reverts_when_distributor_unset() public {
-        uint256[] memory ids = _adminMintAs(1);
-
-        // Owner unwires distributor.
+        // Distributor can't be unwired once set, so use a fresh NFT that never
+        // had one. No tokens can be minted in this state — facade mutations
+        // revert and views return safe defaults.
         vm.prank(owner);
-        nft.setDistributor(address(0));
+        OposNFT freshNft = new OposNFT(address(renderer));
 
-        // Facade calls revert with helpful message.
-        vm.prank(nft.ownerOf(ids[0]));
+        vm.prank(actors[0]);
         vm.expectRevert(bytes("Distributor not set"));
-        nft.claim(ids[0]);
+        freshNft.claim(1);
+
+        vm.prank(actors[0]);
+        vm.expectRevert(bytes("Distributor not set"));
+        freshNft.wake(1);
 
         // Views return safe defaults rather than revert.
-        assertEq(nft.pendingReward(ids[0]), 0, "view returns 0");
-        assertFalse(nft.isAsleep(ids[0]), "view returns false");
+        assertEq(freshNft.pendingReward(1), 0, "view returns 0");
+        assertFalse(freshNft.isAsleep(1), "view returns false");
     }
 
     function test_facade_claimFor_only_callable_by_NFT() public {

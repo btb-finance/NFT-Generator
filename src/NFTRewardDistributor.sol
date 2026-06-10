@@ -29,6 +29,19 @@ interface ITieredNFT {
 ///         Sleeping NFTs leave the divisor, so their would-be share goes to
 ///         active holders of the same tier. Active users earn more when the
 ///         lazy ones drop out — which is the whole point.
+///
+/// @dev    REWARD_TOKEN requirements: transferring X must debit the sender's
+///         balance by exactly X, and balances must never change on their own
+///         (no rebasing) — the `lastBalance` accounting diffs this contract's
+///         own balance. A transfer tax absorbed by the RECIPIENT (sender
+///         debited exactly X, like OPOSSUM's 1%) is therefore compatible, but
+///         claim payouts would arrive 1% short of the displayed pending.
+///         Production wiring: set this distributor as the OPOS treasury —
+///         trade taxes then flow in here directly and outbound claims are
+///         tax-exempt (`from == treasury`), so holders receive exactly what
+///         their NFT displays. Rounding dust from the per-tier splits stays
+///         in the contract as unclaimable wei — intentional and economically
+///         negligible, not a leak.
 contract NFTRewardDistributor is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -70,6 +83,12 @@ contract NFTRewardDistributor is ReentrancyGuard {
     ///         Asleep NFTs do not earn rewards and are excluded from the divisor.
     mapping(uint256 => bool) public asleep;
 
+    /// @notice TokenIds the NFT contract registered via onMintBatch. Claim,
+    ///         reap, and wake all require registration, so the distributor
+    ///         never pays out against an id it wasn't told about — even if the
+    ///         NFT contract's tierIndexOf were to misbehave for unknown ids.
+    mapping(uint256 => bool) public registered;
+
     event Claimed(address indexed claimer, uint256 indexed tokenId, uint256 amount);
     event Synced(uint256 newRewards);
     event TierMint(uint256 indexed tokenId, uint8 indexed tier, uint256 newActiveCount);
@@ -88,6 +107,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     error NotStaleYet();
     error BatchTooLarge();
     error EmptyBatch();
+    error NotRegistered();
 
     constructor(address rewardToken, address nft) {
         if (rewardToken == address(0) || nft == address(0)) revert ZeroAddress();
@@ -97,9 +117,10 @@ contract NFTRewardDistributor is ReentrancyGuard {
 
     // ─────────────────────────── views ───────────────────────────
 
-    /// @notice Pending reward for a tokenId, in token wei. Returns 0 if asleep.
+    /// @notice Pending reward for a tokenId, in token wei. Returns 0 if asleep
+    ///         or never registered.
     function pendingReward(uint256 tokenId) public view returns (uint256) {
-        if (asleep[tokenId]) return 0;
+        if (!registered[tokenId] || asleep[tokenId]) return 0;
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 projected = _projectedAcc(tier);
         return (projected - lastIndex[tokenId]) / ACC_PRECISION;
@@ -186,6 +207,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     function _claim(address user, uint256 tokenId) internal {
+        if (!registered[tokenId]) revert NotRegistered();
         if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (asleep[tokenId]) revert NFTAsleep();
         _sync();
@@ -208,6 +230,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         uint256 len = tokenIds.length;
         for (uint256 i; i < len; ++i) {
             uint256 id = tokenIds[i];
+            if (!registered[id]) revert NotRegistered();
             if (NFT.ownerOf(id) != user) revert NotNFTOwner();
             if (asleep[id]) revert NFTAsleep();
             uint8 tier = NFT.tierIndexOf(id);
@@ -239,7 +262,10 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice Reap a stale NFT. Anyone can call after SLEEP_THRESHOLD has
     ///         passed since the NFT's last activity. Caller takes 100% of the
     ///         pending reward; the NFT is marked asleep and stops earning.
+    ///         Emits Reaped even when nothing was owed, so indexers tracking
+    ///         sleep state never miss a transition.
     function reap(uint256 tokenId) external nonReentrant {
+        if (!registered[tokenId]) revert NotRegistered();
         if (asleep[tokenId]) revert NFTAsleep();
         if (block.timestamp < lastActivityAt[tokenId] + SLEEP_THRESHOLD) revert NotStaleYet();
         _sync();
@@ -247,16 +273,17 @@ contract NFTRewardDistributor is ReentrancyGuard {
         uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
         lastIndex[tokenId] = accRewardPerSlot[tier];
         asleep[tokenId] = true;
-        if (activeInTier[tier] > 0) {
-            unchecked { activeInTier[tier] -= 1; }
-        }
+        // Every registered, awake token is counted in activeInTier, so this
+        // cannot underflow; checked math turns any future violation of that
+        // invariant into a loud revert instead of a corrupted divisor.
+        activeInTier[tier] -= 1;
         _tryEmitMetadataUpdate(tokenId);
         if (owed > 0) {
             lifetimeClaimed[tokenId] += owed;
             lastBalance -= owed;
             REWARD_TOKEN.safeTransfer(msg.sender, owed);
-            emit Reaped(msg.sender, tokenId, owed);
         }
+        emit Reaped(msg.sender, tokenId, owed);
     }
 
     /// @notice Wake a sleeping NFT. Only callable by the current owner. The NFT
@@ -273,6 +300,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     function _wake(address user, uint256 tokenId) internal {
+        if (!registered[tokenId]) revert NotRegistered();
         if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (!asleep[tokenId]) revert NotAsleep();
         _sync();
@@ -319,6 +347,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
             // still earn that tier's backlog.
             lastIndex[id] = accRewardPerSlot[tier];
             lastActivityAt[id] = nowTs;
+            registered[id] = true;
             unchecked { activeInTier[tier] += 1; }
             emit TierMint(id, tier, activeInTier[tier]);
         }

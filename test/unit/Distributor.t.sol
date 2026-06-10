@@ -326,4 +326,59 @@ contract DistributorTest is TestBase {
         assertEq(distributor.tierPending(tier), 0, "released");
         assertEq(distributor.pending(ids[0]), 1000 ether, "windfall = entire backlog");
     }
+
+    // ─────────────────────── R1 — registration gating ───────────────────────
+
+    function test_R1_unregistered_id_rejected_everywhere() public {
+        _buyAs(actors[0], 1);
+        _arriveFee(1000 ether);
+        uint256 fakeId = 999_999; // never minted, never registered
+
+        // Even 100+ days "stale" (lastActivityAt == 0), reap refuses before
+        // it ever touches the accumulator or the NFT contract.
+        vm.warp(block.timestamp + 100 days);
+        vm.prank(actors[1]);
+        vm.expectRevert(NFTRewardDistributor.NotRegistered.selector);
+        distributor.reap(fakeId);
+
+        vm.prank(actors[1]);
+        vm.expectRevert(NFTRewardDistributor.NotRegistered.selector);
+        distributor.claim(fakeId);
+
+        uint256[] memory batch = new uint256[](1);
+        batch[0] = fakeId;
+        vm.prank(actors[1]);
+        vm.expectRevert(NFTRewardDistributor.NotRegistered.selector);
+        distributor.claimMany(batch);
+
+        vm.prank(actors[1]);
+        vm.expectRevert(NFTRewardDistributor.NotRegistered.selector);
+        distributor.wake(fakeId);
+
+        // Views report nothing claimable for unknown ids.
+        assertEq(distributor.pendingReward(fakeId), 0, "no pending for unknown id");
+    }
+
+    function test_R1_minted_ids_are_registered() public {
+        uint256[] memory ids = _buyAs(actors[0], 3);
+        for (uint256 i = 0; i < ids.length; ++i) {
+            assertTrue(distributor.registered(ids[i]), "minted id registered");
+        }
+    }
+
+    // ─────────────────────── R2 — Reaped event fires with owed == 0 ─────────
+
+    function test_R2_reap_emits_event_when_nothing_owed() public {
+        // No fees ever arrive, so pending is 0 — but the sleep transition
+        // must still be observable via the Reaped event.
+        uint256[] memory ids = _buyAs(actors[0], 1);
+        vm.warp(block.timestamp + 100 days);
+
+        vm.expectEmit(true, true, false, true, address(distributor));
+        emit NFTRewardDistributor.Reaped(actors[1], ids[0], 0);
+        vm.prank(actors[1]);
+        distributor.reap(ids[0]);
+
+        assertTrue(distributor.asleep(ids[0]), "asleep despite zero payout");
+    }
 }

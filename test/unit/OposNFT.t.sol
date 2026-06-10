@@ -2,6 +2,7 @@
 pragma solidity ^0.8.34;
 
 import {TestBase} from "../helpers/TestBase.sol";
+import {OposNFT} from "../../src/OposNFT.sol";
 
 /// @notice Unit tests for OposNFT (mint paths, access control, gifts).
 contract OposNFTTest is TestBase {
@@ -248,38 +249,53 @@ contract OposNFTTest is TestBase {
     function test_N6_royalty_owner_can_update() public {
         uint256[] memory ids = _adminMintAs(1);
         address newReceiver = actors[2];
-        uint96 newBps = 1000; // 10%
+        uint96 newBps = 250; // 2.5%
 
         vm.prank(owner);
         nft.setDefaultRoyalty(newReceiver, newBps);
 
         (address receiver, uint256 royaltyAmount) = nft.royaltyInfo(ids[0], 1 ether);
         assertEq(receiver, newReceiver, "new receiver");
-        assertEq(royaltyAmount, 0.1 ether, "10% royalty");
+        assertEq(royaltyAmount, 0.025 ether, "2.5% royalty");
+
+        // Anything above the 5% cap is rejected.
+        vm.prank(owner);
+        vm.expectRevert(bytes("Royalty cannot exceed 5%"));
+        nft.setDefaultRoyalty(newReceiver, 501);
     }
 
-    // ─────────────────────────── A9 — setDistributor(0) then mint ─────────────────
+    // ─────────────────────────── A9 — mint requires distributor ───────────────────
 
-    function test_A9_mint_works_without_distributor() public {
-        // Unwire the distributor.
+    /// @dev setDistributor is locked once minting begins, so a mint without a
+    ///      distributor would permanently disable the yield system. Every mint
+    ///      path must therefore revert until the distributor is wired.
+    function test_A9_mint_reverts_without_distributor() public {
+        // Fresh NFT with no distributor wired.
         vm.prank(owner);
-        nft.setDistributor(address(0));
+        OposNFT freshNft = new OposNFT(address(renderer));
 
-        // Mint should still succeed (no notification attempted).
-        uint256 startSupply = nft.totalSupply();
         vm.prank(owner);
-        nft.adminMint(5);
-        assertEq(nft.totalSupply(), startSupply + 5, "mint without distributor works");
+        vm.expectRevert(bytes("Distributor not set"));
+        freshNft.adminMint(5);
 
-        // Distributor's activeInTier did NOT change (it wasn't notified).
-        // Re-wire and verify subsequent mints DO notify.
+        uint256 price = freshNft.mintPrice();
+        vm.deal(actors[0], 1 ether);
+        vm.prank(actors[0]);
+        vm.expectRevert(bytes("Distributor not set"));
+        freshNft.buy{value: price}(1);
+
+        address[] memory recipients = new address[](1);
+        recipients[0] = actors[1];
         vm.prank(owner);
-        nft.setDistributor(address(distributor));
+        vm.expectRevert(bytes("Distributor not set"));
+        freshNft.giftNFT(recipients);
 
+        // After wiring, minting works and the distributor is notified.
+        // (The shared fixture's nft/distributor pair demonstrates this.)
         uint256 activeBefore = _sumActive();
         vm.prank(owner);
         nft.adminMint(3);
-        assertEq(_sumActive(), activeBefore + 3, "post-rewire mints notify");
+        assertEq(_sumActive(), activeBefore + 3, "wired mints notify distributor");
     }
 
     // ─────────────────────────── A13 — zero mint price ────────────────────────────

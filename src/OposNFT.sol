@@ -241,11 +241,13 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
 
     /**
      * @dev Tells the distributor about freshly-minted tokenIds so it can
-     *      checkpoint per-tier reward indices. Skipped if distributor is unset.
+     *      checkpoint per-tier reward indices. Reverts if the distributor is
+     *      unset: setDistributor is locked once minting begins, so allowing a
+     *      mint without it would permanently disable the yield system.
      */
     function _notifyDistributor(uint256[] memory ids) private {
         IRewardDistributorView dist = distributor;
-        if (address(dist) == address(0)) return;
+        require(address(dist) != address(0), "Distributor not set");
         IRewardDistributorMint(address(dist)).onMintBatch(ids);
     }
 
