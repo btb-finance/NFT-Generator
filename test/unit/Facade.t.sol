@@ -63,6 +63,77 @@ contract FacadeTest is TestBase {
         assertFalse(distributor.asleep(ids[0]), "should be awake");
     }
 
+    /// @dev Marketplace scenario: a buyer scoops up a batch of reaped
+    ///      (sleeping) NFTs and revives them all in a single transaction.
+    function test_facade_wakeMany_revives_batch_after_purchase() public {
+        uint256[] memory ids = _buyAs(actors[0], 5);
+        _arriveFee(1000 ether);
+
+        // All five go stale and get reaped.
+        vm.warp(block.timestamp + 100 days);
+        for (uint256 i = 0; i < ids.length; ++i) {
+            vm.prank(actors[1]);
+            distributor.reap(ids[i]);
+            assertTrue(distributor.asleep(ids[i]), "reaped");
+        }
+        assertEq(_sumActive(), 0, "all dormant");
+
+        // "OpenSea sale": original owner transfers all five to the buyer.
+        for (uint256 i = 0; i < ids.length; ++i) {
+            vm.prank(actors[0]);
+            nft.transferFrom(actors[0], actors[2], ids[i]);
+        }
+
+        // Buyer revives the whole batch with ONE call through the NFT facade.
+        vm.prank(actors[2]);
+        nft.wakeMany(ids);
+
+        for (uint256 i = 0; i < ids.length; ++i) {
+            assertFalse(distributor.asleep(ids[i]), "awake after batch wake");
+            assertEq(distributor.pendingReward(ids[i]), 0, "earns from now, nothing retroactive");
+        }
+        assertEq(_sumActive(), 5, "all back in the divisor");
+
+        // New rewards now accrue to the buyer's revived NFTs.
+        _arriveFee(1000 ether);
+        uint256 totalPending;
+        for (uint256 i = 0; i < ids.length; ++i) totalPending += distributor.pendingReward(ids[i]);
+        assertGt(totalPending, 0, "revived NFTs earn again");
+    }
+
+    function test_facade_wakeMany_guards() public {
+        uint256[] memory ids = _buyAs(actors[0], 2);
+        vm.warp(block.timestamp + 100 days);
+        vm.prank(actors[1]);
+        distributor.reap(ids[0]);
+        vm.prank(actors[1]);
+        distributor.reap(ids[1]);
+
+        // Non-owner cannot batch-wake someone else's NFTs.
+        vm.prank(actors[3]);
+        vm.expectRevert(NFTRewardDistributor.NotNFTOwner.selector);
+        nft.wakeMany(ids);
+
+        // Empty batch rejected.
+        uint256[] memory empty = new uint256[](0);
+        vm.prank(actors[0]);
+        vm.expectRevert(NFTRewardDistributor.EmptyBatch.selector);
+        nft.wakeMany(empty);
+
+        // Over the cap rejected.
+        uint256[] memory tooMany = new uint256[](101);
+        vm.prank(actors[0]);
+        vm.expectRevert(NFTRewardDistributor.BatchTooLarge.selector);
+        nft.wakeMany(tooMany);
+
+        // Waking an awake token in the batch reverts the whole batch.
+        vm.prank(actors[0]);
+        nft.wake(ids[0]);
+        vm.prank(actors[0]);
+        vm.expectRevert(NFTRewardDistributor.NotAsleep.selector);
+        nft.wakeMany(ids);
+    }
+
     function test_facade_views_reflect_state() public {
         uint256[] memory ids = _buyAs(actors[0], 1);
         _arriveFee(1000 ether);

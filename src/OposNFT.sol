@@ -29,6 +29,7 @@ interface IRewardDistributorClaim {
     function claimFor(address user, uint256 tokenId) external;
     function claimManyFor(address user, uint256[] calldata tokenIds) external;
     function wakeFor(address user, uint256 tokenId) external;
+    function wakeManyFor(address user, uint256[] calldata tokenIds) external;
     function asleep(uint256 tokenId) external view returns (bool);
     function isReapable(uint256 tokenId) external view returns (bool);
     function secondsUntilStale(uint256 tokenId) external view returns (uint256);
@@ -105,6 +106,11 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
     /// @notice Wake a previously-reaped NFT so it earns again. Owner-only.
     function wake(uint256 tokenId) external {
         _requireDistributor().wakeFor(msg.sender, tokenId);
+    }
+
+    /// @notice Wake many previously-reaped NFTs in one tx. Owner-only.
+    function wakeMany(uint256[] calldata tokenIds) external {
+        _requireDistributor().wakeManyFor(msg.sender, tokenIds);
     }
 
     /// @notice Pending OPOS reward (in wei) for `tokenId`. 0 if asleep.

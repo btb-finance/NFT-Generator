@@ -163,11 +163,37 @@ contract NFTRewardDistributor is ReentrancyGuard {
 
     /// @notice Seconds remaining before this tokenId becomes reapable. Returns
     ///         0 if already past the threshold or already asleep.
-    function secondsUntilStale(uint256 tokenId) external view returns (uint256) {
+    function secondsUntilStale(uint256 tokenId) public view returns (uint256) {
         if (asleep[tokenId]) return 0;
         uint256 deadline = lastActivityAt[tokenId] + SLEEP_THRESHOLD;
         if (block.timestamp >= deadline) return 0;
         return deadline - block.timestamp;
+    }
+
+    /// @notice Bulk status read for frontends and reaper bots: one eth_call
+    ///         covers many tokenIds instead of three calls per token.
+    ///         Unregistered ids report (0, 0, false) rather than reverting.
+    /// @dev    View-only; each id costs a few external reads, so keep batches
+    ///         to ~1,000 ids per call to stay inside RPC gas caps.
+    function statusBatch(uint256[] calldata tokenIds)
+        external
+        view
+        returns (
+            uint256[] memory secondsLeft,
+            uint256[] memory pendingAmounts,
+            bool[] memory sleeping
+        )
+    {
+        uint256 len = tokenIds.length;
+        secondsLeft = new uint256[](len);
+        pendingAmounts = new uint256[](len);
+        sleeping = new bool[](len);
+        for (uint256 i; i < len; ++i) {
+            uint256 id = tokenIds[i];
+            sleeping[i] = asleep[id];
+            pendingAmounts[i] = pendingReward(id);
+            secondsLeft[i] = secondsUntilStale(id);
+        }
     }
 
     // ─────────────────────────── core mutations ───────────────────────────
@@ -290,20 +316,52 @@ contract NFTRewardDistributor is ReentrancyGuard {
     ///         starts earning again from the moment it's woken — it does NOT
     ///         retroactively claim rewards that grew during its sleep.
     function wake(uint256 tokenId) external nonReentrant {
-        _wake(msg.sender, tokenId);
+        _sync();
+        _wakeOne(msg.sender, tokenId);
+        _tryEmitMetadataUpdate(tokenId);
     }
 
     /// @notice NFT-contract-only facade so users can wake via `nft.wake()`.
     function wakeFor(address user, uint256 tokenId) external nonReentrant {
         if (msg.sender != address(NFT)) revert NotNFT();
-        _wake(user, tokenId);
+        _sync();
+        _wakeOne(user, tokenId);
+        _tryEmitMetadataUpdate(tokenId);
     }
 
-    function _wake(address user, uint256 tokenId) internal {
+    /// @notice Wake multiple sleeping NFTs in one call (e.g., after buying a
+    ///         batch of reaped NFTs on a marketplace). Caller must own every
+    ///         tokenId, all must be asleep, and the array is capped at
+    ///         MAX_CLAIM_BATCH.
+    function wakeMany(uint256[] calldata tokenIds) external nonReentrant {
+        if (tokenIds.length == 0) revert EmptyBatch();
+        if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
+        _wakeMany(msg.sender, tokenIds);
+    }
+
+    /// @notice NFT-contract-only facade for batch wake.
+    function wakeManyFor(address user, uint256[] calldata tokenIds) external nonReentrant {
+        if (msg.sender != address(NFT)) revert NotNFT();
+        if (tokenIds.length == 0) revert EmptyBatch();
+        if (tokenIds.length > MAX_CLAIM_BATCH) revert BatchTooLarge();
+        _wakeMany(user, tokenIds);
+    }
+
+    function _wakeMany(address user, uint256[] calldata tokenIds) internal {
+        _sync();
+        uint256 len = tokenIds.length;
+        for (uint256 i; i < len; ++i) {
+            _wakeOne(user, tokenIds[i]);
+        }
+        _tryEmitBatchMetadataUpdate();
+    }
+
+    /// @dev Per-token wake logic. Caller is responsible for running _sync()
+    ///      first and emitting the appropriate metadata-update signal.
+    function _wakeOne(address user, uint256 tokenId) internal {
         if (!registered[tokenId]) revert NotRegistered();
         if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (!asleep[tokenId]) revert NotAsleep();
-        _sync();
 
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 prevActive = activeInTier[tier];
@@ -316,13 +374,14 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (prevActive == 0 && tierPending[tier] > 0) {
             // activeInTier[tier] is exactly 1 here (we just incremented from 0),
             // but use the array read explicitly for clarity and parity with
-            // onMintBatch's pending-release loop.
+            // onMintBatch's pending-release loop. In a batch wake, only the
+            // FIRST token of a previously-empty tier inherits the backlog —
+            // identical to waking them one by one in the same order.
             accRewardPerSlot[tier] += (tierPending[tier] * ACC_PRECISION) / activeInTier[tier];
             emit PendingReleased(tier, tierPending[tier]);
             tierPending[tier] = 0;
         }
 
-        _tryEmitMetadataUpdate(tokenId);
         emit Woke(user, tokenId);
     }
 

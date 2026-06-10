@@ -366,6 +366,68 @@ contract DistributorTest is TestBase {
         }
     }
 
+    // ─────────────────────── R3 — statusBatch bulk view ─────────────────────
+
+    function test_R3_statusBatch_matches_single_views_across_states() public {
+        // Build one token in each state: active, stale (reapable), asleep.
+        uint256[] memory ids = _buyAs(actors[0], 3);
+        _arriveFee(1000 ether);
+
+        // Use absolute warp targets: the compiler may cache block.timestamp
+        // within one test function, so chained relative warps don't advance.
+        uint256 t0 = block.timestamp;
+
+        // ids[2] → asleep: make everything stale, reap one, then revive the
+        // other two via claim (resets their activity clock).
+        vm.warp(t0 + 100 days);
+        vm.prank(actors[1]);
+        distributor.reap(ids[2]);
+
+        uint256[] memory awake = new uint256[](2);
+        awake[0] = ids[0];
+        awake[1] = ids[1];
+        vm.prank(actors[0]);
+        distributor.claimMany(awake);
+
+        // ids[1] → stale again: warp past the threshold, then ids[0] claims
+        // once more so only ids[1] is reapable.
+        vm.warp(t0 + 200 days);
+        vm.prank(actors[0]);
+        distributor.claim(ids[0]);
+
+        // Query the three real tokens plus an unregistered id.
+        uint256[] memory query = new uint256[](4);
+        query[0] = ids[0]; // active
+        query[1] = ids[1]; // stale / reapable
+        query[2] = ids[2]; // asleep
+        query[3] = 999_999; // never minted
+
+        (uint256[] memory secondsLeft, uint256[] memory pendingAmts, bool[] memory sleeping) =
+            distributor.statusBatch(query);
+
+        // Batch values match the single-token views exactly.
+        for (uint256 i = 0; i < query.length; ++i) {
+            assertEq(secondsLeft[i], distributor.secondsUntilStale(query[i]), "secondsLeft matches");
+            assertEq(pendingAmts[i], distributor.pendingReward(query[i]), "pending matches");
+            assertEq(sleeping[i], distributor.asleep(query[i]), "sleeping matches");
+        }
+
+        // And the states themselves are what the scenario built.
+        assertGt(secondsLeft[0], 0, "active token has time left");
+        assertFalse(sleeping[0], "active token awake");
+
+        assertEq(secondsLeft[1], 0, "stale token has no time left");
+        assertFalse(sleeping[1], "stale token still awake");
+        assertTrue(distributor.isReapable(ids[1]), "stale token reapable");
+
+        assertTrue(sleeping[2], "reaped token asleep");
+        assertEq(pendingAmts[2], 0, "asleep token shows no pending");
+
+        assertEq(secondsLeft[3], 0, "unregistered: zero");
+        assertEq(pendingAmts[3], 0, "unregistered: zero");
+        assertFalse(sleeping[3], "unregistered: not sleeping");
+    }
+
     // ─────────────────────── R2 — Reaped event fires with owed == 0 ─────────
 
     function test_R2_reap_emits_event_when_nothing_owed() public {
