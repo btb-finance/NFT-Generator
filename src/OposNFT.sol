@@ -10,6 +10,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 interface IOposRenderer {
     function buildArt(uint256 seed) external pure returns (string memory);
@@ -41,7 +43,7 @@ interface IRewardDistributorClaim {
  *      ERC-2981 royalties for marketplaces, ERC-4906 metadata-update events for
  *      live yield display, and per-token OPOS yield via the NFTRewardDistributor.
  */
-contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
+contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 {
     using Strings for uint256;
 
     uint256 private _tokenIdCounter = 1; // Start from 1, not 0
@@ -62,7 +64,11 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
     event DistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
     event RefundFailed(address indexed buyer, uint256 amount);
 
-    constructor(address _renderer) ERC721("OPOSSUM NFT", "OPOSN") Ownable(msg.sender) {
+    constructor(address _renderer)
+        ERC721("OPOSSUM NFT", "OPOSN")
+        EIP712("OPOSSUM NFT", "1")
+        Ownable(msg.sender)
+    {
         renderer = IOposRenderer(_renderer);
         // Set 5% royalty fee to contract owner
         _setDefaultRoyalty(msg.sender, 500); // 500 basis points = 5%
@@ -243,6 +249,90 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard {
             (bool ok, ) = payable(msg.sender).call{value: msg.value - totalCost}("");
             if (!ok) emit RefundFailed(msg.sender, msg.value - totalCost);
         }
+    }
+
+    // ───────────── XP mint — free mints earned in the BTB app ─────────────
+    // Users earn XP off-chain; the backend converts spendable XP into an
+    // EIP-712 voucher signed by `xpSigner`: "this wallet may mint up to
+    // `totalAllowed` NFTs, lifetime". The allowance is CUMULATIVE, so
+    // replaying an old voucher can never mint more than the backend approved
+    // — when a user earns more XP, the backend simply signs a higher total.
+
+    /// @notice Backend key that signs XP-mint vouchers. address(0) = disabled.
+    address public xpSigner;
+
+    /// @notice Lifetime NFTs minted via XP vouchers, per wallet.
+    mapping(address => uint256) public xpMinted;
+
+    bytes32 private constant XP_MINT_TYPEHASH =
+        keccak256("XPMint(address user,uint256 totalAllowed,uint256 deadline)");
+
+    event XPSignerUpdated(address indexed oldSigner, address indexed newSigner);
+    event XPMinted(address indexed user, uint256 amount, uint256 totalAllowed);
+
+    error XPMintDisabled();
+    error XPVoucherExpired();
+    error InvalidXPSignature();
+    error ExceedsXPAllowance();
+
+    /// @notice Set (or rotate) the backend voucher signer. Zero disables XP
+    ///         minting — e.g., immediately after a backend key leak.
+    function setXPSigner(address newSigner) external onlyOwner {
+        address old = xpSigner;
+        xpSigner = newSigner;
+        emit XPSignerUpdated(old, newSigner);
+    }
+
+    /// @notice EIP-712 digest the backend must sign for an XP voucher. Exposed
+    ///         so the backend/frontend can build signatures without
+    ///         re-implementing the domain separator.
+    function hashXPMint(address user, uint256 totalAllowed, uint256 deadline)
+        public
+        view
+        returns (bytes32)
+    {
+        return _hashTypedDataV4(
+            keccak256(abi.encode(XP_MINT_TYPEHASH, user, totalAllowed, deadline))
+        );
+    }
+
+    /**
+     * @notice Free mint against an XP voucher signed by the backend.
+     * @param amount       NFTs to mint now (1-200 per tx).
+     * @param totalAllowed Lifetime cap the voucher grants this wallet.
+     * @param deadline     Voucher expiry timestamp.
+     * @param signature    xpSigner's EIP-712 signature over (caller, totalAllowed, deadline).
+     */
+    function mintWithXP(
+        uint256 amount,
+        uint256 totalAllowed,
+        uint256 deadline,
+        bytes calldata signature
+    ) external nonReentrant {
+        if (xpSigner == address(0)) revert XPMintDisabled();
+        if (block.timestamp > deadline) revert XPVoucherExpired();
+        require(amount > 0 && amount <= 200, "Amount must be 1-200");
+        // Last minted id must be ≤ MAX_SUPPLY.
+        require(_tokenIdCounter + amount - 1 <= MAX_SUPPLY, "Exceeds max supply");
+
+        bytes32 digest = hashXPMint(msg.sender, totalAllowed, deadline);
+        if (ECDSA.recover(digest, signature) != xpSigner) revert InvalidXPSignature();
+
+        uint256 used = xpMinted[msg.sender];
+        if (used + amount > totalAllowed) revert ExceedsXPAllowance();
+        xpMinted[msg.sender] = used + amount;
+
+        uint256[] memory ids = new uint256[](amount);
+        for (uint256 i = 0; i < amount; i++) {
+            uint256 tokenId = _tokenIdCounter++;
+            uint256 traits = _generateTraits(tokenId);
+            tokenTraits[tokenId] = traits;
+            ids[i] = tokenId;
+            _safeMint(msg.sender, tokenId);
+        }
+        _notifyDistributor(ids);
+        emit BatchMetadataUpdate(ids[0], ids[ids.length - 1]);
+        emit XPMinted(msg.sender, amount, totalAllowed);
     }
 
     /**

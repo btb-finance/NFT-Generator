@@ -63,9 +63,10 @@ contract OposRenderer {
 
         // ── Black silhouette: ears + one rounded head→body shape ──
         out = string(abi.encodePacked(out,
-            // ears (outer)
-            _pixel(8, 2, "#000"), _rect(7, 3, 3, 2, "#000"),
-            _pixel(15, 2, "#000"), _rect(14, 3, 3, 2, "#000")
+            // ears — big, ROUNDED and dark (real opossum petal ears; pointy
+            // triangles read as a cat)
+            _rect(7, 2, 2, 1, "#000"), _rect(6, 3, 3, 2, "#000"),
+            _rect(15, 2, 2, 1, "#000"), _rect(15, 3, 3, 2, "#000")
         ));
         out = string(abi.encodePacked(out,
             // head outline, rows 4-12 (rounded, gentle neck pinch)
@@ -103,10 +104,9 @@ contract OposRenderer {
             _rect(9, 19, 6, 1, body)
         ));
 
-        // ── Pink inner ears ──
+        // ── Pink inner ears (small center dot — opossum ears are mostly dark) ──
         out = string(abi.encodePacked(out,
-            _pixel(8, 3, "#FFC0CB"), _pixel(8, 4, "#FFC0CB"),
-            _pixel(15, 3, "#FFC0CB"), _pixel(15, 4, "#FFC0CB")
+            _pixel(7, 3, "#FFC0CB"), _pixel(16, 3, "#FFC0CB")
         ));
 
         // ── Soft cream belly (rounded, not a hard rectangle) ──
@@ -126,9 +126,11 @@ contract OposRenderer {
         // ── Eyes (driven by expression) ──
         out = string(abi.encodePacked(out, _drawEyes(expression, eyeColor)));
 
-        // ── Pink nose + rosy blush on the cheeks ──
+        // ── Pointed snout: the white mask narrows one row further and ends in
+        //    a pink nose tip (the long pale snout is THE opossum identifier) ──
         out = string(abi.encodePacked(out,
-            _pixel(11, 11, "#FF6FA5"), _pixel(12, 11, "#FF6FA5"),
+            _pixel(10, 12, "#FFFFFF"), _pixel(13, 12, "#FFFFFF"),
+            _pixel(11, 12, "#FF6FA5"), _pixel(12, 12, "#FF6FA5"),
             _pixel(8, 10, "#FFB6C1"), _pixel(15, 10, "#FFB6C1")
         ));
 
