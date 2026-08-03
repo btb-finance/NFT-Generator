@@ -105,15 +105,46 @@ contract NFTRewardDistributor is ReentrancyGuard {
     ///         Asleep NFTs do not earn rewards and are excluded from the divisor.
     mapping(uint256 => bool) public asleep;
 
-    /// @notice TokenIds the NFT contract registered via onMintBatch. Claim,
-    ///         reap, and wake all require registration, so the distributor
-    ///         never pays out against an id it wasn't told about — even if the
-    ///         NFT contract's tierIndexOf were to misbehave for unknown ids.
-    mapping(uint256 => bool) public registered;
+    // ───────────── Mint batches (see onMintBatch) ─────────────
+    // Minting used to write three cold slots per token — `registered`,
+    // `lastActivityAt` and `lastIndex` — about 66k gas each token, roughly half
+    // the total mint cost. All three were the SAME value for every token in a
+    // batch, so they are recorded once per batch and derived on read instead.
+    // Per-token slots are now written only when a token actually claims, reaps
+    // or wakes, paid for by whoever does it.
+
+    struct MintBatch {
+        uint32 firstId;   // batches are contiguous ascending id ranges
+        uint32 lastId;
+        uint48 mintedAt;  // starts the sleep clock for every token in it
+    }
+
+    /// @notice One entry per mint, ordered by firstId. Binary-searched on read.
+    MintBatch[] public mintBatches;
+
+    /// @notice accRewardPerSlot per tier at the moment a batch was minted —
+    ///         the `lastIndex` its tokens start from.
+    mapping(uint256 => uint256[5]) private batchAcc;
+
+    /// @notice Number of recorded mint batches.
+    function mintBatches_length() external view returns (uint256) {
+        return mintBatches.length;
+    }
+
+    /// @notice Highest tokenId this distributor has been told about. Derived
+    ///         from the last batch rather than stored — one fewer cold SSTORE
+    ///         per mint, which matters most for single-token buys where there
+    ///         is no batch to amortise it over.
+    function highestMinted() public view returns (uint256) {
+        uint256 n = mintBatches.length;
+        return n == 0 ? 0 : mintBatches[n - 1].lastId;
+    }
 
     event Claimed(address indexed claimer, uint256 indexed tokenId, uint256 amount);
     event Synced(uint256 newRewards);
-    event TierMint(uint256 indexed tokenId, uint8 indexed tier, uint256 newActiveCount);
+    /// @dev One event per batch rather than per token: the per-token event
+    ///      cost ~1,900 gas each and carried nothing a range cannot express.
+    event TierMintBatch(uint256 indexed firstId, uint256 indexed lastId, uint256[5] perTier);
     event PendingReleased(uint8 indexed tier, uint256 amount);
     event Reaped(address indexed reaper, uint256 indexed tokenId, uint256 amount);
     event Woke(address indexed owner, uint256 indexed tokenId);
@@ -130,6 +161,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     error BatchTooLarge();
     error EmptyBatch();
     error NotRegistered();
+    error NonContiguousBatch();
 
     /**
      * @param rewardToken     Token rewards are paid in.
@@ -159,15 +191,61 @@ contract NFTRewardDistributor is ReentrancyGuard {
         }
     }
 
-    /// @dev Registered explicitly via onMintBatch, or inherited at deployment.
-    function _isRegistered(uint256 tokenId) internal view returns (bool) {
-        return registered[tokenId] || (tokenId != 0 && tokenId <= INHERITED_SUPPLY);
+    /// @notice Whether this distributor recognises `tokenId`. Derived from the
+    ///         minted range rather than a per-token flag, which is what removes
+    ///         a cold SSTORE from every mint.
+    function registered(uint256 tokenId) public view returns (bool) {
+        if (tokenId == 0) return false;
+        return tokenId <= highestMinted() || tokenId <= INHERITED_SUPPLY;
     }
 
-    /// @dev Last activity, defaulting inherited tokens to the deployment time.
+    function _isRegistered(uint256 tokenId) internal view returns (bool) {
+        return registered(tokenId);
+    }
+
+    /// @dev Index of the batch containing `tokenId`, if any. Inherited tokens
+    ///      predate this contract and have no batch.
+    function _batchOf(uint256 tokenId) internal view returns (bool found, uint256 index) {
+        uint256 n = mintBatches.length;
+        if (n == 0) return (false, 0);
+        // Last batch whose firstId is <= tokenId.
+        uint256 lo;
+        uint256 hi = n;
+        while (lo < hi) {
+            uint256 mid = (lo + hi) >> 1;
+            if (mintBatches[mid].firstId <= tokenId) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo == 0) return (false, 0);
+        index = lo - 1;
+        if (tokenId > mintBatches[index].lastId) return (false, 0);
+        found = true;
+    }
+
+    /**
+     * @dev The token's reward checkpoint. A non-zero per-token value always
+     *      wins; zero means the token has never claimed, reaped or woken, so it
+     *      still sits on its batch's snapshot.
+     *
+     *      Zero is safe as the "unset" marker: every write to lastIndex stores
+     *      accRewardPerSlot[tier], which is monotonic and always >= the batch
+     *      snapshot. If it writes zero then the snapshot is zero too, so both
+     *      readings agree.
+     */
+    function _indexOf(uint256 tokenId, uint8 tier) internal view returns (uint256) {
+        uint256 stored = lastIndex[tokenId];
+        if (stored != 0) return stored;
+        (bool found, uint256 index) = _batchOf(tokenId);
+        return found ? batchAcc[index][tier] : 0;
+    }
+
+    /// @dev Last activity: the per-token value, else the batch's mint time,
+    ///      else (for inherited tokens) this contract's deployment.
     function _activityAt(uint256 tokenId) internal view returns (uint256) {
         uint256 at = lastActivityAt[tokenId];
-        return at == 0 ? ACTIVATED_AT : at;
+        if (at != 0) return at;
+        (bool found, uint256 index) = _batchOf(tokenId);
+        return found ? mintBatches[index].mintedAt : ACTIVATED_AT;
     }
 
     // ─────────────────────────── views ───────────────────────────
@@ -178,7 +256,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (!_isRegistered(tokenId) || asleep[tokenId]) return 0;
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 projected = _projectedAcc(tier);
-        return (projected - lastIndex[tokenId]) / ACC_PRECISION;
+        return (projected - _indexOf(tokenId, tier)) / ACC_PRECISION;
     }
 
     /// @notice ABI-compatible view used by OposNFT's `IRewardDistributorView`.
@@ -295,7 +373,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (asleep[tokenId]) revert NFTAsleep();
         _sync();
         uint8 tier = NFT.tierIndexOf(tokenId);
-        uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
+        uint256 owed = (accRewardPerSlot[tier] - _indexOf(tokenId, tier)) / ACC_PRECISION;
         lastIndex[tokenId] = accRewardPerSlot[tier];
         lastActivityAt[tokenId] = block.timestamp;
         if (owed > 0) {
@@ -317,7 +395,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
             if (NFT.ownerOf(id) != user) revert NotNFTOwner();
             if (asleep[id]) revert NFTAsleep();
             uint8 tier = NFT.tierIndexOf(id);
-            uint256 owed = (accRewardPerSlot[tier] - lastIndex[id]) / ACC_PRECISION;
+            uint256 owed = (accRewardPerSlot[tier] - _indexOf(id, tier)) / ACC_PRECISION;
             lastIndex[id] = accRewardPerSlot[tier];
             lastActivityAt[id] = block.timestamp;
             if (owed > 0) {
@@ -362,7 +440,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         if (block.timestamp < _activityAt(tokenId) + SLEEP_THRESHOLD) revert NotStaleYet();
         _sync();
         uint8 tier = NFT.tierIndexOf(tokenId);
-        uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
+        uint256 owed = (accRewardPerSlot[tier] - _indexOf(tokenId, tier)) / ACC_PRECISION;
         lastIndex[tokenId] = accRewardPerSlot[tier];
         asleep[tokenId] = true;
         // Every registered, awake token is counted in activeInTier, so this
@@ -453,31 +531,64 @@ contract NFTRewardDistributor is ReentrancyGuard {
 
     // ─────────────────────────── mint hook ───────────────────────────
 
-    /// @notice Called by the NFT contract right after a batch mint.
+    /**
+     * @notice Called by the NFT contract right after a batch mint.
+     *
+     * @dev Writes a fixed amount of storage per BATCH rather than per token.
+     *      The tokens in a batch share a mint timestamp and a starting reward
+     *      index, so those are snapshotted once and derived on read; tier
+     *      counts are tallied in memory and applied with five writes at the
+     *      end. What remains per token is one `tierIndexOf` read.
+     *
+     *      Requires the batch to be a contiguous ascending id range, which is
+     *      what every OposNFT mint path produces (ids come from a counter).
+     *      Enforcing it is what makes the range-based lookups sound.
+     */
     function onMintBatch(uint256[] calldata tokenIds) external {
         if (msg.sender != address(NFT)) revert NotNFT();
         _sync();
+
+        uint256 len = tokenIds.length;
+        if (len == 0) return;
+
+        uint256 firstId = tokenIds[0];
+        uint256 lastId = tokenIds[len - 1];
+        if (lastId < firstId || lastId - firstId + 1 != len) revert NonContiguousBatch();
+        if (lastId > type(uint32).max) revert NonContiguousBatch();
 
         uint256[5] memory countsBefore = [
             activeInTier[0], activeInTier[1], activeInTier[2],
             activeInTier[3], activeInTier[4]
         ];
 
-        uint256 nowTs = block.timestamp;
-        uint256 len = tokenIds.length;
+        // Tally tiers in memory — no per-token storage.
+        uint256[5] memory added;
         for (uint256 i; i < len; ++i) {
-            uint256 id = tokenIds[i];
-            uint8 tier = NFT.tierIndexOf(id);
-            // Snapshot BEFORE pending release so first minters of an empty tier
-            // still earn that tier's backlog.
-            lastIndex[id] = accRewardPerSlot[tier];
-            lastActivityAt[id] = nowTs;
-            registered[id] = true;
-            unchecked { activeInTier[tier] += 1; }
-            emit TierMint(id, tier, activeInTier[tier]);
+            unchecked { added[NFT.tierIndexOf(tokenIds[i])] += 1; }
         }
 
-        // Release pending for tiers that went from 0 → N>0 in this batch.
+        // Snapshot BEFORE the pending release below, so the first minters into
+        // an empty tier still collect that tier's backlog.
+        uint256 batchIndex = mintBatches.length;
+        mintBatches.push(MintBatch({
+            firstId: uint32(firstId),
+            lastId: uint32(lastId),
+            mintedAt: uint48(block.timestamp)
+        }));
+        for (uint8 t; t < TIERS; ++t) {
+            // Zero is the implicit default, so only non-zero snapshots cost gas.
+            if (accRewardPerSlot[t] != 0) batchAcc[batchIndex][t] = accRewardPerSlot[t];
+        }
+
+        for (uint8 t; t < TIERS; ++t) {
+            if (added[t] != 0) {
+                unchecked { activeInTier[t] += added[t]; }
+            }
+        }
+
+        emit TierMintBatch(firstId, lastId, added);
+
+        // Release pending for tiers that went from 0 -> N>0 in this batch.
         for (uint8 t; t < TIERS; ++t) {
             if (countsBefore[t] == 0 && activeInTier[t] > 0 && tierPending[t] > 0) {
                 accRewardPerSlot[t] += (tierPending[t] * ACC_PRECISION) / activeInTier[t];

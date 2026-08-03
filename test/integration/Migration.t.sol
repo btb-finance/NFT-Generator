@@ -86,9 +86,11 @@ contract MigrationTest is TestBase {
     function test_MG2_successor_inherits_existing_tokens() public {
         NFTRewardDistributor next = _deploySuccessor();
 
-        // Nobody called onMintBatch on `next`, yet it already knows the tokens.
+        // Nobody called onMintBatch on `next`, yet it already recognises every
+        // token — registration is derived from the inherited range, not stored.
+        assertEq(next.mintBatches_length(), 0, "no batches were recorded on the successor");
         for (uint256 i = 0; i < ids.length; ++i) {
-            assertFalse(next.registered(ids[i]), "not explicitly registered");
+            assertTrue(next.registered(ids[i]), "inherited token is recognised");
             assertEq(next.secondsUntilStale(ids[i]), 100 days, "sleep clock starts at deployment");
         }
 

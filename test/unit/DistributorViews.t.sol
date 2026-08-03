@@ -306,6 +306,80 @@ contract DistributorViewsTest is TestBase {
         vm.stopPrank();
     }
 
+    // ─────────────────── batch-snapshot fallbacks ───────────────────
+    // Mint no longer writes per-token slots; the values are derived from the
+    // batch until the token first claims/reaps/wakes. These cover the seams.
+
+    function test_V8_token_that_never_claims_still_accrues_from_its_batch() public {
+        _mintTier(1, actors[0], 4);
+        token.mintTo(address(dist), 1_000 ether);
+
+        // Nothing was ever written for token 1, yet it is owed its full share.
+        assertEq(dist.pendingReward(1), 200 ether, "derived checkpoint pays correctly");
+
+        vm.prank(actors[0]);
+        dist.claim(1);
+        assertEq(token.balanceOf(actors[0]), 200 ether, "and it pays out");
+    }
+
+    function test_V8_later_batches_do_not_claim_earlier_rewards() public {
+        _mintTier(1, actors[0], 4);
+        token.mintTo(address(dist), 1_000 ether);
+        dist.sync(); // 200 ether accrues to token 1 alone
+
+        // A token minted afterwards must start from the NEW index, not zero,
+        // or it would claim rewards from before it existed.
+        _mintTier(2, actors[1], 4);
+        assertEq(dist.pendingReward(2), 0, "later mint starts at the current index");
+        assertEq(dist.pendingReward(1), 200 ether, "earlier token keeps its accrual");
+
+        token.mintTo(address(dist), 1_000 ether);
+        dist.sync(); // now split between the two
+        assertEq(dist.pendingReward(2), 100 ether, "shares only what came after it");
+        assertEq(dist.pendingReward(1), 300 ether, "200 alone + 100 shared");
+    }
+
+    function test_V8_batch_boundaries_resolve_to_the_right_batch() public {
+        uint256[] memory a = new uint256[](3);
+        a[0] = 1; a[1] = 2; a[2] = 3;
+        mockNft.mint(a, actors[0], 4);
+
+        token.mintTo(address(dist), 1_000 ether);
+        dist.sync();
+
+        uint256[] memory b = new uint256[](3);
+        b[0] = 4; b[1] = 5; b[2] = 6;
+        mockNft.mint(b, actors[0], 4);
+
+        // Last id of batch 1 and first id of batch 2 must not be confused.
+        assertGt(dist.pendingReward(3), 0, "last token of the first batch accrued");
+        assertEq(dist.pendingReward(4), 0, "first token of the second batch did not");
+        assertEq(dist.mintBatches_length(), 2, "two batches recorded");
+    }
+
+    function test_V8_sleep_clock_starts_at_mint_not_deployment() public {
+        vm.warp(block.timestamp + 500 days); // deploy long ago, mint much later
+        _mintTier(1, actors[0], 4);
+
+        assertEq(dist.secondsUntilStale(1), 100 days, "full window from the mint");
+        vm.warp(block.timestamp + 100 days - 1);
+        assertFalse(dist.isReapable(1), "not yet");
+        vm.warp(block.timestamp + 1);
+        assertTrue(dist.isReapable(1), "stale exactly on schedule");
+    }
+
+    function test_V8_claim_then_the_stored_value_wins() public {
+        _mintTier(1, actors[0], 4);
+        token.mintTo(address(dist), 1_000 ether);
+        vm.prank(actors[0]);
+        dist.claim(1);
+
+        // After a claim the per-token slot is set and must override the batch.
+        assertEq(dist.pendingReward(1), 0, "no double claim from the batch snapshot");
+        token.mintTo(address(dist), 1_000 ether);
+        assertEq(dist.pendingReward(1), 200 ether, "and it keeps earning after");
+    }
+
     // ─────────────────── ERC-4906 hook resilience ───────────────────
 
     function test_V7_claim_survives_a_reverting_metadata_hook() public {
