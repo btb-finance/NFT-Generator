@@ -277,7 +277,16 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     /// @notice Public sync — anyone can refresh the per-tier indices.
-    function sync() external {
+    /// @dev    `nonReentrant` matters here even though this function moves no
+    ///         tokens. Payout paths decrement `lastBalance` and only then call
+    ///         `safeTransfer`. A reward token that calls back BEFORE its own
+    ///         balance update (ERC777 `tokensToSend`, callback wrappers) could
+    ///         otherwise re-enter here, where the contract still holds the
+    ///         outgoing amount but has already written it off — and `_sync`
+    ///         would book the contract's own payout as fresh rewards. That
+    ///         leaves `lastBalance` permanently above the real balance, which
+    ///         strands the difference forever: there is no admin to correct it.
+    function sync() external nonReentrant {
         if (_sync()) {
             _tryEmitBatchMetadataUpdate();
         }
