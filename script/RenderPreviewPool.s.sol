@@ -39,7 +39,7 @@ contract RenderPreviewPool is Script {
         OposRenderer renderer = new OposRenderer(address(new OposPalette()), address(new OposParts()));
         OposNFT nft = new OposNFT(address(renderer));
         PreviewToken token = new PreviewToken();
-        NFTRewardDistributor distributor = new NFTRewardDistributor(address(token), address(nft));
+        NFTRewardDistributor distributor = new NFTRewardDistributor(address(token), address(nft), 0, [uint256(0), 0, 0, 0, 0]);
         nft.setDistributor(address(distributor));
 
         uint256 remaining = POOL_SIZE;

@@ -26,7 +26,7 @@ contract ReentrancyTest is Test {
         renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
         evil = new ReentrantToken();
-        dist = new NFTRewardDistributor(address(evil), address(nft));
+        dist = new NFTRewardDistributor(address(evil), address(nft), 0, [uint256(0), 0, 0, 0, 0]);
         nft.setDistributor(address(dist));
         // Mint 1 NFT to alice via gift so we don't need ETH plumbing.
         address[] memory recipients = new address[](1);

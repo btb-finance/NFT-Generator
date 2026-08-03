@@ -19,7 +19,7 @@ contract DistributorViewsTest is TestBase {
         super.setUp();
         token = new MockOPOS();
         mockNft = new MockTieredNFT();
-        dist = new NFTRewardDistributor(address(token), address(mockNft));
+        dist = new NFTRewardDistributor(address(token), address(mockNft), 0, [uint256(0), 0, 0, 0, 0]);
         mockNft.setDistributor(address(dist));
     }
 
@@ -36,10 +36,10 @@ contract DistributorViewsTest is TestBase {
 
     function test_V1_constructor_rejects_zero_addresses() public {
         vm.expectRevert(NFTRewardDistributor.ZeroAddress.selector);
-        new NFTRewardDistributor(address(0), address(mockNft));
+        new NFTRewardDistributor(address(0), address(mockNft), 0, [uint256(0), 0, 0, 0, 0]);
 
         vm.expectRevert(NFTRewardDistributor.ZeroAddress.selector);
-        new NFTRewardDistributor(address(token), address(0));
+        new NFTRewardDistributor(address(token), address(0), 0, [uint256(0), 0, 0, 0, 0]);
     }
 
     function test_V1_constructor_stores_immutables() public view {
@@ -66,7 +66,7 @@ contract DistributorViewsTest is TestBase {
 
         // Mythic exists but no commons.
         MockTieredNFT nft2 = new MockTieredNFT();
-        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(token), address(nft2));
+        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(token), address(nft2), 0, [uint256(0), 0, 0, 0, 0]);
         nft2.setDistributor(address(dist2));
         uint256[] memory one = _ids(1);
         nft2.mint(one, actors[0], 0);
@@ -195,9 +195,9 @@ contract DistributorViewsTest is TestBase {
         assertEq(pend[0], dist.pendingReward(1), "known id pending matches");
         assertFalse(sleeping[0], "known id awake");
 
-        // Unregistered ids have lastActivityAt == 0, so their countdown is
-        // measured from the epoch — it means nothing, but it must not revert.
-        assertEq(secs[1], 100 days - block.timestamp, "unregistered counts down from epoch");
+        // Unregistered ids now count down from the deployment timestamp, not
+        // the epoch, so they report a full window instead of "already stale".
+        assertEq(secs[1], 100 days, "unregistered reports a full window");
         assertEq(pend[1], 0, "unregistered pays nothing");
         assertFalse(sleeping[1], "unregistered is not asleep");
     }

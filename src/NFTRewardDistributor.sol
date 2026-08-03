@@ -55,6 +55,28 @@ contract NFTRewardDistributor is ReentrancyGuard {
     IERC20 public immutable REWARD_TOKEN;
     ITieredNFT public immutable NFT;
 
+    // ───────────── Takeover support ─────────────
+    // A replacement distributor is deployed AFTER tokens already exist, so it
+    // can never receive the onMintBatch calls that registered them. Rather than
+    // enrolling 88,888 tokens one by one (millions of gas, and unfair while
+    // half-done because activeInTier is the reward divisor), a takeover
+    // deployment inherits them: every id up to INHERITED_SUPPLY counts as
+    // registered from birth, and the tier divisors are seeded at construction.
+    //
+    // Nothing is copied from the old contract and no admin supplies balances.
+    // The predecessor keeps its own funds and stays fully usable — its claim()
+    // is public and authorises against the NFT, so holders can always withdraw
+    // rewards accrued there even after the NFT points somewhere else.
+
+    /// @notice Highest tokenId this deployment treats as pre-registered.
+    ///         Zero for a first deployment.
+    uint256 public immutable INHERITED_SUPPLY;
+
+    /// @notice Deployment timestamp. Inherited tokens have no recorded
+    ///         activity, so their sleep clock starts here rather than at the
+    ///         epoch — otherwise every one of them would be instantly reapable.
+    uint256 public immutable ACTIVATED_AT;
+
     /// @notice Cumulative reward-per-NFT for each tier, scaled by ACC_PRECISION.
     uint256[5] public accRewardPerSlot;
 
@@ -109,10 +131,43 @@ contract NFTRewardDistributor is ReentrancyGuard {
     error EmptyBatch();
     error NotRegistered();
 
-    constructor(address rewardToken, address nft) {
+    /**
+     * @param rewardToken     Token rewards are paid in.
+     * @param nft             The collection this distributor serves.
+     * @param inheritedSupply Tokens 1..inheritedSupply are treated as already
+     *                        registered. Pass 0 for a first deployment; pass
+     *                        the live supply when replacing an existing
+     *                        distributor.
+     * @param seedActive      Starting active count per tier. Pass all zeros for
+     *                        a first deployment. For a takeover these are the
+     *                        awake token counts per tier — publicly checkable
+     *                        from the NFT before the migration timelock ends.
+     */
+    constructor(
+        address rewardToken,
+        address nft,
+        uint256 inheritedSupply,
+        uint256[5] memory seedActive
+    ) {
         if (rewardToken == address(0) || nft == address(0)) revert ZeroAddress();
         REWARD_TOKEN = IERC20(rewardToken);
         NFT = ITieredNFT(nft);
+        INHERITED_SUPPLY = inheritedSupply;
+        ACTIVATED_AT = block.timestamp;
+        for (uint8 t; t < TIERS; ++t) {
+            activeInTier[t] = seedActive[t];
+        }
+    }
+
+    /// @dev Registered explicitly via onMintBatch, or inherited at deployment.
+    function _isRegistered(uint256 tokenId) internal view returns (bool) {
+        return registered[tokenId] || (tokenId != 0 && tokenId <= INHERITED_SUPPLY);
+    }
+
+    /// @dev Last activity, defaulting inherited tokens to the deployment time.
+    function _activityAt(uint256 tokenId) internal view returns (uint256) {
+        uint256 at = lastActivityAt[tokenId];
+        return at == 0 ? ACTIVATED_AT : at;
     }
 
     // ─────────────────────────── views ───────────────────────────
@@ -120,7 +175,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice Pending reward for a tokenId, in token wei. Returns 0 if asleep
     ///         or never registered.
     function pendingReward(uint256 tokenId) public view returns (uint256) {
-        if (!registered[tokenId] || asleep[tokenId]) return 0;
+        if (!_isRegistered(tokenId) || asleep[tokenId]) return 0;
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 projected = _projectedAcc(tier);
         return (projected - lastIndex[tokenId]) / ACC_PRECISION;
@@ -157,15 +212,17 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @notice True if the NFT can currently be reaped (stale ≥ SLEEP_THRESHOLD
     ///         and not already asleep).
     function isReapable(uint256 tokenId) external view returns (bool) {
-        if (asleep[tokenId]) return false;
-        return block.timestamp >= lastActivityAt[tokenId] + SLEEP_THRESHOLD;
+        // Unregistered ids report false rather than "stale since the epoch",
+        // so reaper bots stop burning gas on tokens that were never minted.
+        if (asleep[tokenId] || !_isRegistered(tokenId)) return false;
+        return block.timestamp >= _activityAt(tokenId) + SLEEP_THRESHOLD;
     }
 
     /// @notice Seconds remaining before this tokenId becomes reapable. Returns
     ///         0 if already past the threshold or already asleep.
     function secondsUntilStale(uint256 tokenId) public view returns (uint256) {
         if (asleep[tokenId]) return 0;
-        uint256 deadline = lastActivityAt[tokenId] + SLEEP_THRESHOLD;
+        uint256 deadline = _activityAt(tokenId) + SLEEP_THRESHOLD;
         if (block.timestamp >= deadline) return 0;
         return deadline - block.timestamp;
     }
@@ -233,7 +290,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     }
 
     function _claim(address user, uint256 tokenId) internal {
-        if (!registered[tokenId]) revert NotRegistered();
+        if (!_isRegistered(tokenId)) revert NotRegistered();
         if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (asleep[tokenId]) revert NFTAsleep();
         _sync();
@@ -256,7 +313,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
         uint256 len = tokenIds.length;
         for (uint256 i; i < len; ++i) {
             uint256 id = tokenIds[i];
-            if (!registered[id]) revert NotRegistered();
+            if (!_isRegistered(id)) revert NotRegistered();
             if (NFT.ownerOf(id) != user) revert NotNFTOwner();
             if (asleep[id]) revert NFTAsleep();
             uint8 tier = NFT.tierIndexOf(id);
@@ -300,9 +357,9 @@ contract NFTRewardDistributor is ReentrancyGuard {
     ///         Emits Reaped even when nothing was owed, so indexers tracking
     ///         sleep state never miss a transition.
     function reap(uint256 tokenId) external nonReentrant {
-        if (!registered[tokenId]) revert NotRegistered();
+        if (!_isRegistered(tokenId)) revert NotRegistered();
         if (asleep[tokenId]) revert NFTAsleep();
-        if (block.timestamp < lastActivityAt[tokenId] + SLEEP_THRESHOLD) revert NotStaleYet();
+        if (block.timestamp < _activityAt(tokenId) + SLEEP_THRESHOLD) revert NotStaleYet();
         _sync();
         uint8 tier = NFT.tierIndexOf(tokenId);
         uint256 owed = (accRewardPerSlot[tier] - lastIndex[tokenId]) / ACC_PRECISION;
@@ -368,7 +425,7 @@ contract NFTRewardDistributor is ReentrancyGuard {
     /// @dev Per-token wake logic. Caller is responsible for running _sync()
     ///      first and emitting the appropriate metadata-update signal.
     function _wakeOne(address user, uint256 tokenId) internal {
-        if (!registered[tokenId]) revert NotRegistered();
+        if (!_isRegistered(tokenId)) revert NotRegistered();
         if (NFT.ownerOf(tokenId) != user) revert NotNFTOwner();
         if (!asleep[tokenId]) revert NotAsleep();
 

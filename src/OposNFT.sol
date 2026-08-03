@@ -82,9 +82,8 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 
     }
 
     /**
-     * @dev Wire up the OPOS reward distributor. Once set, `tokenURI` will display
-     *      claimable + lifetime OPOS as integer traits, and the distributor may
-     *      emit ERC-4906 metadata-update events through this contract.
+     * @dev Wire up the OPOS reward distributor. Only usable before the first
+     *      mint; afterwards a change must go through the timelock below.
      */
     function setDistributor(address _distributor) external onlyOwner {
         require(_distributor != address(0), "Distributor cannot be zero");
@@ -92,6 +91,63 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 
         address old = address(distributor);
         distributor = IRewardDistributorView(_distributor);
         emit DistributorUpdated(old, _distributor);
+        emit BatchMetadataUpdate(1, MAX_SUPPLY);
+    }
+
+    // ───────────── Timelocked distributor migration ─────────────
+    //
+    // The distributor is where every holder's rewards live and it has no admin,
+    // no pause and no upgrade path. Freezing it forever means a bug found after
+    // launch can never be fixed; letting the owner swap it instantly would let
+    // them redirect the fee stream without warning. The timelock is the middle
+    // ground: a change is announced on-chain and cannot take effect for
+    // MIGRATION_DELAY, giving holders time to inspect the replacement, verify
+    // its seeded tier counts, claim out, or sell.
+    //
+    // Migration moves no money. The old distributor keeps its balance and stays
+    // fully functional — its claim() is public and authorises against this NFT,
+    // so holders can still withdraw whatever accrued there. New fees simply
+    // flow to the new one. Nothing is ever confiscatable by the owner.
+
+    /// @notice How long an announced distributor change must wait.
+    uint256 public constant MIGRATION_DELAY = 30 days;
+
+    address public pendingDistributor;
+    uint256 public migrationReadyAt;
+
+    event DistributorMigrationProposed(address indexed newDistributor, uint256 readyAt);
+    event DistributorMigrationCancelled(address indexed newDistributor);
+
+    /// @notice Announce a replacement distributor. Starts the clock.
+    function proposeDistributor(address _distributor) external onlyOwner {
+        require(_distributor != address(0), "Distributor cannot be zero");
+        require(address(distributor) != address(0), "No distributor to replace");
+        pendingDistributor = _distributor;
+        migrationReadyAt = block.timestamp + MIGRATION_DELAY;
+        emit DistributorMigrationProposed(_distributor, migrationReadyAt);
+    }
+
+    /// @notice Abandon an announced migration.
+    function cancelDistributorMigration() external onlyOwner {
+        address cancelled = pendingDistributor;
+        require(cancelled != address(0), "Nothing pending");
+        pendingDistributor = address(0);
+        migrationReadyAt = 0;
+        emit DistributorMigrationCancelled(cancelled);
+    }
+
+    /// @notice Complete an announced migration once the delay has elapsed.
+    function commitDistributor() external onlyOwner {
+        address next = pendingDistributor;
+        require(next != address(0), "Nothing pending");
+        require(block.timestamp >= migrationReadyAt, "Migration is still timelocked");
+
+        address old = address(distributor);
+        distributor = IRewardDistributorView(next);
+        pendingDistributor = address(0);
+        migrationReadyAt = 0;
+
+        emit DistributorUpdated(old, next);
         emit BatchMetadataUpdate(1, MAX_SUPPLY);
     }
 

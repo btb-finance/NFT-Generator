@@ -41,7 +41,7 @@ contract OposEndToEndTest is Test {
         opos = new OPOSSUM(address(btb), owner, owner);
         renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
-        distributor = new NFTRewardDistributor(address(opos), address(nft));
+        distributor = new NFTRewardDistributor(address(opos), address(nft), 0, [uint256(0), 0, 0, 0, 0]);
         nft.setDistributor(address(distributor));
         opos.setTreasury(address(distributor));
         vm.stopPrank();
@@ -133,7 +133,7 @@ contract OposEndToEndTest is Test {
         address feeWallet = makeAddr("feeWallet");
         vm.startPrank(owner);
         OposNFT nft2 = new OposNFT(address(renderer));
-        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(opos), address(nft2));
+        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(opos), address(nft2), 0, [uint256(0), 0, 0, 0, 0]);
         nft2.setDistributor(address(dist2));
         opos.setTreasury(feeWallet); // distributor deliberately NOT exempt
         vm.stopPrank();

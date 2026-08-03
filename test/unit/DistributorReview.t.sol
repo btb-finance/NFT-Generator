@@ -25,7 +25,7 @@ contract DistributorReviewTest is TestBase {
         super.setUp();
         token = new MockOPOS();
         mockNft = new MockTieredNFT();
-        dist = new NFTRewardDistributor(address(token), address(mockNft));
+        dist = new NFTRewardDistributor(address(token), address(mockNft), 0, [uint256(0), 0, 0, 0, 0]);
         mockNft.setDistributor(address(dist));
     }
 
@@ -43,7 +43,7 @@ contract DistributorReviewTest is TestBase {
     function test_R1_reentrant_sync_during_payout_cannot_corrupt_accounting() public {
         SyncReenterToken evil = new SyncReenterToken();
         MockTieredNFT nft2 = new MockTieredNFT();
-        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(evil), address(nft2));
+        NFTRewardDistributor dist2 = new NFTRewardDistributor(address(evil), address(nft2), 0, [uint256(0), 0, 0, 0, 0]);
         nft2.setDistributor(address(dist2));
 
         uint256[] memory ids = new uint256[](1);
@@ -129,21 +129,29 @@ contract DistributorReviewTest is TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // FINDING 3 — isReapable() answers for ids that were never minted.
+    // FINDING 3 (fixed) — isReapable() used to answer "true" for ids that were
+    // never minted, because lastActivityAt defaulted to 0 and every id looked
+    // stale since the epoch. Reaper bots would burn gas on impossible targets.
     // ─────────────────────────────────────────────────────────────
 
-    function test_R3_isReapable_is_true_for_ids_that_do_not_exist() public {
-        // lastActivityAt defaults to 0, so any unminted id looks stale once
-        // 100 days have passed since the epoch — which is always, on mainnet.
+    function test_R3_isReapable_is_false_for_ids_that_do_not_exist() public {
+        // Before the warp the clock runs from deployment, not the epoch.
+        assertEq(dist.secondsUntilStale(999_999), 100 days, "full window at deployment");
+
         vm.warp(block.timestamp + 100 days);
+        assertFalse(dist.isReapable(999_999), "unminted id must not look reapable");
+        assertFalse(dist.registered(999_999), "and it is not registered");
 
-        assertTrue(dist.isReapable(999_999), "unminted id reports reapable");
-        assertFalse(dist.registered(999_999), "...but it was never registered");
-
-        // reap() itself is safe; the cost is bots burning gas on ids that can
-        // never succeed.
         vm.expectRevert(NFTRewardDistributor.NotRegistered.selector);
         dist.reap(999_999);
+    }
+
+    /// @notice A real token still becomes reapable on schedule.
+    function test_R3_real_tokens_still_go_stale() public {
+        _mintTier(1, actors[0], 4);
+        assertFalse(dist.isReapable(1), "fresh mint is not reapable");
+        vm.warp(block.timestamp + 100 days);
+        assertTrue(dist.isReapable(1), "stale after the threshold");
     }
 
     // ─────────────────────────────────────────────────────────────

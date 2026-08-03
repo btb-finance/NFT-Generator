@@ -31,7 +31,7 @@ abstract contract TestBase is Test {
         renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
         opos = new MockOPOS();
-        distributor = new NFTRewardDistributor(address(opos), address(nft));
+        distributor = new NFTRewardDistributor(address(opos), address(nft), 0, [uint256(0), 0, 0, 0, 0]);
         nft.setDistributor(address(distributor));
         vm.stopPrank();
 

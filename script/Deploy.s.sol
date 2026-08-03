@@ -29,7 +29,7 @@ contract Deploy is Script {
         console.log("OposNFT:", address(nft));
 
         console.log("Deploying NFTRewardDistributor...");
-        NFTRewardDistributor distributor = new NFTRewardDistributor(oposToken, address(nft));
+        NFTRewardDistributor distributor = new NFTRewardDistributor(oposToken, address(nft), 0, [uint256(0), 0, 0, 0, 0]);
         console.log("NFTRewardDistributor:", address(distributor));
 
         // Wire the NFT to the distributor so tokenURI shows live yield
