@@ -370,93 +370,163 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 
         require(ok, "Withdraw failed");
     }
 
-    // ───────────── Guaranteed-unique trait generation ─────────────
+    // ───────────── Tiered, guaranteed-unique trait generation ─────────────
     //
-    // The art reads exactly six fields out of a token's seed:
-    //   body 30 · expression 10 · pattern 10 · accessory 15 · eye 20 · background 7
-    // = 6,300,000 distinct opossums. Drawing those at random from a hash gave
-    // ~617 duplicate pictures across 88,888 tokens — that is the birthday
-    // problem, not a bug, and no amount of extra hashing fixes it.
+    // Two properties, both by construction rather than by chance:
     //
-    // So the seed is no longer drawn at random. Each tokenId is mapped through
-    // a PERMUTATION of [0, 6,300,000) — a bijection, so two different tokenIds
-    // can never land on the same combination. The resulting combination is then
-    // encoded back into a seed that the existing extraction logic decodes to
-    // exactly those six traits, which is why nothing downstream had to change.
+    //   1. EXACT tier counts — 889 Mythic / 3,556 Legendary / 8,889 Epic /
+    //      17,778 Rare / 57,776 Common. That is 1/4/10/20/65 percent with zero
+    //      variance, so the rarest tier really is the smallest and each tier's
+    //      20% fee share is split among the intended number of holders.
     //
-    // Duplicates are now impossible by construction rather than unlikely.
+    //   2. NO DUPLICATE ART — no two tokens ever share all six traits.
+    //
+    // Higher tiers also draw from their OWN pools of bodies and accessories.
+    // A Rainbow body or a Golden Crown can only ever appear on a Mythic; a
+    // Common is one of six plain furs wearing nothing or a bow tie. Rarity is
+    // therefore visible in the picture, not just asserted in the metadata.
+    //
+    // Pipeline: tokenId -> shuffled rank -> tier + offset within tier ->
+    // shuffled index into that tier's combination space -> six traits -> seed.
+    // Every stage is a bijection, so the guarantees survive composition.
 
-    uint256 private constant TRAIT_COMBINATIONS = 6_300_000;
+    /// @dev Cumulative tier boundaries over the shuffled rank.
+    uint256 private constant MYTHIC_END = 889;
+    uint256 private constant LEGENDARY_END = 4_445;
+    uint256 private constant EPIC_END = 13_334;
+    uint256 private constant RARE_END = 31_112;
 
-    /// @dev Feistel domain: the smallest power of two above TRAIT_COMBINATIONS,
-    ///      split into two 12-bit halves.
-    uint256 private constant FEISTEL_DOMAIN = 1 << 24;
-    uint256 private constant HALF_MASK = 0xFFF;
+    /// @dev Body ids grouped by tier (Mythic first), 5 bits each.
+    uint256 private constant BODY_ORDER =
+        0x0000000000000000000000000012418820bdab47b9ac59cbace25181bbcdcd0a;
+    /// @dev Accessory ids grouped by tier, 4 bits each.
+    uint256 private constant ACC_ORDER =
+        0x000000000000000000000000000000000000000000000000030a754eb2c619d8;
+    /// @dev Reverse lookup, 3 bits per body id -> tier. The body alone fixes
+    ///      the tier because the pools are disjoint.
+    uint256 private constant BODY_TIER =
+        0x00000000000000000000000000000000000000000000496db049692420454924;
+    /// @dev Per tier, 4 bytes: bodyStart, bodyCount, accStart, accCount.
+    uint256 private constant POOLS =
+        0x000000000000000000000000020d0618040905130306060d0303070603000600;
 
-    /// @dev Fixed domain separator. Changing it reshuffles which tokenId gets
-    ///      which opossum, so it must never change after launch.
-    bytes32 private constant TRAIT_SALT = keccak256("OPOSSUM.traits.v1");
+    /// @dev Fixed domain separators. Changing either reshuffles which tokenId
+    ///      receives which opossum, so neither may change after launch.
+    uint256 private constant RANK_SALT = uint256(keccak256("OPOSSUM.rank.v1"));
+    uint256 private constant TRAIT_SALT = uint256(keccak256("OPOSSUM.traits.v1"));
 
     error TraitPermutationFailed();
 
     /**
      * @notice The trait seed for `tokenId`. Pure and public so a frontend can
-     *         render a token without touching chain state.
+     *         render or preview a token without touching chain state.
      */
     function traitSeedOf(uint256 tokenId) public pure returns (uint256) {
-        uint256 combination = _permute(tokenId);
+        // Shuffle the id so tiers are scattered across the mint order rather
+        // than handed to whoever buys first.
+        uint256 rank = _shuffle(tokenId - 1, 9, MAX_SUPPLY, RANK_SALT);
 
-        // Split the combination index into the six trait values. This is a
-        // mixed-radix decomposition, so it is one-to-one.
+        (uint8 tier, uint256 offset) = _tierAt(rank);
+        (uint256 bStart, uint256 bCount, uint256 aStart, uint256 aCount) = _pool(tier);
+
+        // Spread this tier's members across its whole combination space.
+        uint256 space = bCount * aCount * 10 * 10 * 20 * 7;
+        uint256 combination = _shuffle(offset, 10, space, TRAIT_SALT + tier);
+
         uint256 background = combination % 7;
         combination /= 7;
         uint256 eye = combination % 20;
         combination /= 20;
-        uint256 accessory = combination % 15;
-        combination /= 15;
+        uint256 accessory = _slot(ACC_ORDER, 4, aStart + (combination % aCount));
+        combination /= aCount;
         uint256 pattern = combination % 10;
         combination /= 10;
         uint256 expression = combination % 10;
         combination /= 10;
-        uint256 body = combination % 30;
+        uint256 body = _slot(BODY_ORDER, 5, bStart + (combination % bCount));
 
         return _encodeSeed(body, expression, pattern, accessory, eye, background);
     }
 
+    /// @dev Which tier a shuffled rank falls into, and its offset inside it.
+    function _tierAt(uint256 rank) private pure returns (uint8 tier, uint256 offset) {
+        if (rank < MYTHIC_END) return (0, rank);
+        if (rank < LEGENDARY_END) return (1, rank - MYTHIC_END);
+        if (rank < EPIC_END) return (2, rank - LEGENDARY_END);
+        if (rank < RARE_END) return (3, rank - EPIC_END);
+        return (4, rank - RARE_END);
+    }
+
+    function _pool(uint8 tier)
+        private
+        pure
+        returns (uint256 bStart, uint256 bCount, uint256 aStart, uint256 aCount)
+    {
+        uint256 packed = POOLS >> (uint256(tier) * 32);
+        bStart = packed & 0xFF;
+        bCount = (packed >> 8) & 0xFF;
+        aStart = (packed >> 16) & 0xFF;
+        aCount = (packed >> 24) & 0xFF;
+    }
+
+    function _slot(uint256 table, uint256 width, uint256 index) private pure returns (uint256) {
+        return (table >> (index * width)) & ((1 << width) - 1);
+    }
+
     /**
-     * @dev Bijection on [0, TRAIT_COMBINATIONS). A 4-round Feistel network
-     *      permutes [0, 2^24); cycle-walking (re-applying it until the value
-     *      lands back inside the real range) narrows that to a permutation of
-     *      exactly our domain. Each step is a bijection, so the composition is.
+     * @dev A bijection on [0, limit). A 4-round Feistel network permutes
+     *      [0, 2^(2*halfBits)); cycle-walking — re-applying it until the value
+     *      lands back inside `limit` — narrows that to a permutation of exactly
+     *      the wanted domain. Both steps are bijections, so the result is one.
      *
-     *      Roughly 2.7 walks are needed on average (2^24 / 6.3M). The bound of
-     *      256 makes failure a ~1e-52 event; reverting rather than falling back
-     *      keeps the uniqueness guarantee absolute.
+     *      The 256-iteration bound makes failure a vanishing probability;
+     *      reverting rather than falling back keeps the guarantee absolute.
      */
-    function _permute(uint256 tokenId) private pure returns (uint256) {
-        uint256 v = tokenId;
+    function _shuffle(uint256 value, uint256 halfBits, uint256 limit, uint256 salt)
+        private
+        pure
+        returns (uint256)
+    {
+        uint256 mask = (1 << halfBits) - 1;
+        uint256 v = value;
         for (uint256 i = 0; i < 256; ++i) {
-            uint256 l = v >> 12;
-            uint256 r = v & HALF_MASK;
+            uint256 l = v >> halfBits;
+            uint256 r = v & mask;
             for (uint256 round = 0; round < 4; ++round) {
-                uint256 f = uint256(keccak256(abi.encodePacked(r, round, TRAIT_SALT))) & HALF_MASK;
+                uint256 f = _hash(r, round, salt) & mask;
                 (l, r) = (r, l ^ f);
             }
-            v = ((l << 12) | r) % FEISTEL_DOMAIN;
-            if (v < TRAIT_COMBINATIONS) return v;
+            v = (l << halfBits) | r;
+            if (v < limit) return v;
         }
         revert TraitPermutationFailed();
     }
 
     /**
+     * @dev keccak over three words written to scratch memory that is reused on
+     *      every call. `abi.encodePacked` would allocate instead, and Solidity
+     *      never frees: a 500-token buy runs this thousands of times, and the
+     *      quadratic memory-expansion cost would dwarf the mint itself.
+     */
+    function _hash(uint256 a, uint256 b, uint256 c) private pure returns (uint256 h) {
+        assembly {
+            let p := mload(0x40)
+            mstore(p, a)
+            mstore(add(p, 0x20), b)
+            mstore(add(p, 0x40), c)
+            h := keccak256(p, 0x60)
+        }
+    }
+
+    /**
      * @dev Builds a seed that decodes to exactly the six given traits.
      *
-     *      The extractors read overlapping bit ranges (`seed % 30`,
-     *      `(seed >> 8) % 10`, ...), and because the moduli are not powers of
-     *      two, every byte leaks upward into the fields below it. So the bytes
-     *      are solved from the top down, each one chosen to cancel the leakage
-     *      from the bytes already fixed above it. A solution always exists
-     *      because a byte ranges over 256 values and every modulus is <= 30.
+     *      The extractors read overlapping ranges (`seed % 30`,
+     *      `(seed >> 8) % 10`, ...) and the moduli are not powers of two, so
+     *      every byte leaks upward into the fields below it. The bytes are
+     *      solved from the top down, each chosen to cancel the leakage from
+     *      those already fixed. A solution always exists because a byte spans
+     *      256 values and every modulus is at most 30.
      */
     function _encodeSeed(
         uint256 body,
@@ -601,53 +671,17 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 
      * @dev Returns the tier index from a trait seed: 0=Mythic, 1=Legendary,
      *      2=Epic, 3=Rare, 4=Common. Mirrors the score logic in `_getRarityTier`.
      */
+    /**
+     * @dev Tier index from a trait seed: 0=Mythic .. 4=Common.
+     *
+     *      The old version scored "rare" traits and bucketed the total, which
+     *      produced 13.9% Mythic and 9.5% Common — the ladder upside down.
+     *      Tiers are now allocated exactly at mint and each tier owns its own
+     *      body pool, so the body alone identifies the tier.
+     */
     function _getRarityIndex(uint256 seed) private pure returns (uint8) {
-        // All casts are safe because we mod by small values
         // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 bodyIndex = uint8(seed % 30);
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 accessoryIndex = uint8((seed >> 24) % 15);
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 eyeIndex = uint8((seed >> 32) % 20);
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint8 patternIndex = uint8((seed >> 16) % 10);
-
-        uint8 rarityScore = 0;
-
-        // Ultra rare bodies (Rainbow, Chrome, Rose Gold, Diamond, Galaxy)
-        if (bodyIndex == 10 || bodyIndex == 8 || bodyIndex == 19 || bodyIndex >= 27) {
-            rarityScore += 3;
-        }
-        // Rare bodies (Golden, Burgundy, Navy, Emerald, Cosmic, Neon)
-        else if (bodyIndex == 6 || bodyIndex == 16 || bodyIndex == 17 || bodyIndex == 18 || bodyIndex >= 24) {
-            rarityScore += 2;
-        }
-
-        // Legendary accessories (Golden Crown, Wizard Hat, Halo)
-        if (accessoryIndex == 8 || accessoryIndex == 9 || accessoryIndex >= 13) {
-            rarityScore += 3;
-        }
-        // Rare accessories (Crown, Top Hat, Astronaut Helmet, Monocle, Cape)
-        else if (accessoryIndex == 1 || accessoryIndex == 2 || accessoryIndex == 6 || accessoryIndex == 11 || accessoryIndex == 12) {
-            rarityScore += 2;
-        }
-
-        // Rare eyes (Gold, Silver, Indigo, Rainbow, Laser)
-        if (eyeIndex == 2 || eyeIndex == 11 || eyeIndex == 13 || eyeIndex >= 17) {
-            rarityScore += 1;
-        }
-
-        // Rare patterns (Calico, Tiger Stripes, Galaxy, Flames)
-        if (patternIndex == 7 || patternIndex == 5 || patternIndex >= 8) {
-            rarityScore += 1;
-        }
-
-        // Determine tier index based on score
-        if (rarityScore >= 6) return 0;  // Mythic     (~1%  = ~889 NFTs)
-        if (rarityScore >= 4) return 1;  // Legendary  (~4%  = ~3,556 NFTs)
-        if (rarityScore >= 3) return 2;  // Epic       (~10% = ~8,889 NFTs)
-        if (rarityScore >= 1) return 3;  // Rare       (~20% = ~17,778 NFTs)
-        return 4;                         // Common     (~65% = ~57,776 NFTs)
+        return uint8((BODY_TIER >> ((seed % 30) * 3)) & 0x7);
     }
 
     function _getBodyName(uint256 seed) private pure returns (string memory) {

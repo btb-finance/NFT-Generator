@@ -182,6 +182,49 @@ contract MetadataTest is TestBase {
         assertEq(vm.parseJsonString(_json(ids[0]), ".attributes[10].value"), "1K", "lifetime persists");
     }
 
+    // ─────────────────── tier-scaled effects ───────────────────
+
+    /// @dev Renders a token of each tier and checks the frame treatment steps
+    ///      up with rarity: no glow on Common, a glow from Rare, sparkles from
+    ///      Epic, and animation only on Mythic.
+    function _artForTier(uint8 wanted) internal view returns (string memory) {
+        for (uint256 id = 1; id <= 4000; ++id) {
+            uint256 seed = nft.traitSeedOf(id);
+            if (_tierOfSeed(seed) == wanted) return renderer.buildArt(seed);
+        }
+        revert("no token of that tier in the first 4,000");
+    }
+
+    function _tierOfSeed(uint256 seed) internal pure returns (uint8) {
+        uint256 body = seed % 30;
+        if (body == 10 || body == 8 || body == 19 || body >= 27) return 0;
+        if (body == 6 || body == 16 || body == 17 || body == 18 || body >= 24) return 1;
+        if (body == 5 || body == 7 || (body >= 11 && body <= 14)) return 2;
+        if (body == 15 || (body >= 20 && body <= 23)) return 3;
+        return 4;
+    }
+
+    function test_M14_effects_scale_with_rarity() public view {
+        string memory common = _artForTier(4);
+        assertFalse(common.contains('fill="url(#a)"'), "Common has no aura");
+        assertFalse(common.contains("<animate"), "Common does not animate");
+
+        string memory rare = _artForTier(3);
+        assertTrue(rare.contains('fill="url(#a)"'), "Rare gains an aura");
+        assertFalse(rare.contains("<animate"), "Rare does not animate");
+
+        string memory epic = _artForTier(2);
+        assertTrue(epic.contains("#9B30FF"), "Epic aura is purple");
+
+        string memory legendary = _artForTier(1);
+        assertTrue(legendary.contains("#FFD700"), "Legendary aura is gold");
+        assertFalse(legendary.contains("<animate"), "Legendary does not animate");
+
+        string memory mythic = _artForTier(0);
+        assertTrue(mythic.contains("#FF3DDB"), "Mythic aura is magenta");
+        assertTrue(mythic.contains("<animate"), "only Mythic animates");
+    }
+
     // ─────────────────── ERC-165 advertisement ───────────────────
 
     function test_M8_supportsInterface_advertises_expected_standards() public view {

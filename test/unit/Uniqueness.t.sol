@@ -180,22 +180,7 @@ contract UniquenessTest is TestBase {
         console.log("50/50 chance of a duplicate at about this many mints:", (approxSqrt * 1177) / 1000);
     }
 
-    /// @notice CHARACTERISATION TEST — pins what the tier split ACTUALLY is.
-    ///
-    ///         OposNFT documents roughly 1/4/10/20/65 percent for
-    ///         Mythic/Legendary/Epic/Rare/Common. The real split is nothing
-    ///         like that, and it is not caused by the trait permutation: the
-    ///         "rare" trait sets are enormous (13 of 30 bodies and 9 of 15
-    ///         accessories score points), so a high score is the normal case.
-    ///         Uniform random seeds produced the same skew.
-    ///
-    ///         This matters beyond labelling. Each tier splits 20% of all fees
-    ///         among its own members, so a tier with FEWER members pays MORE
-    ///         per NFT. With Common the smallest tier and Mythic among the
-    ///         largest, per-NFT yield currently runs backwards.
-    ///
-    ///         Numbers are asserted so the split cannot drift unnoticed while
-    ///         the thresholds are being decided.
+    /// @notice Tier counts are now allocated, not scored — so they are exact.
     function test_U7_rarity_distribution_across_full_supply() public view {
         uint256 max = nft.MAX_SUPPLY();
         uint256[5] memory tiers;
@@ -209,16 +194,61 @@ contract UniquenessTest is TestBase {
             console.log(names[t], tiers[t], (tiers[t] * 10_000) / max); // count, basis points
         }
 
+        // Exact, not approximate: 1 / 4 / 10 / 20 / 65 percent.
+        assertEq(tiers[0], 889, "Mythic count");
+        assertEq(tiers[1], 3556, "Legendary count");
+        assertEq(tiers[2], 8889, "Epic count");
+        assertEq(tiers[3], 17778, "Rare count");
+        assertEq(tiers[4], 57776, "Common count");
         assertEq(tiers[0] + tiers[1] + tiers[2] + tiers[3] + tiers[4], max, "every token has a tier");
 
-        // Current reality, to 1% tolerance. NOT the documented targets.
-        assertApproxEqAbs((tiers[0] * 10_000) / max, 1388, 100, "Mythic ~13.9% (documented: 1%)");
-        assertApproxEqAbs((tiers[1] * 10_000) / max, 2914, 100, "Legendary ~29.1% (documented: 4%)");
-        assertApproxEqAbs((tiers[4] * 10_000) / max, 947, 100, "Common ~9.5% (documented: 65%)");
+        // The ladder is the right way up: rarer means fewer, which means each
+        // holder of that tier takes a larger slice of the tier's 20% of fees.
+        assertGt(tiers[4], tiers[3], "Common > Rare");
+        assertGt(tiers[3], tiers[2], "Rare > Epic");
+        assertGt(tiers[2], tiers[1], "Epic > Legendary");
+        assertGt(tiers[1], tiers[0], "Legendary > Mythic");
+    }
 
-        // The inversion, stated outright: Common is meant to be the biggest
-        // tier and currently is the smallest.
-        assertLt(tiers[4], tiers[0], "documenting the inversion: fewer Commons than Mythics");
+    /// @notice Each tier owns its bodies and accessories, so the tier is
+    ///         visible in the art rather than only in the attribute list.
+    function test_U9_tiers_do_not_share_bodies_or_accessories() public {
+        uint256 max = nft.MAX_SUPPLY();
+        uint8[30] memory bodyTier;
+        uint8[15] memory accTier;
+        bool[30] memory bodySeen;
+        bool[15] memory accSeen;
+
+        vm.pauseGasMetering();
+        for (uint256 id = 1; id <= max; ++id) {
+            uint256 seed = nft.traitSeedOf(id);
+            uint8 tier = _tierOf(seed);
+            uint256 body = seed % 30;
+            uint256 accessory = (seed >> 24) % 15;
+
+            if (bodySeen[body]) {
+                assertEq(bodyTier[body], tier, "a body colour leaked across tiers");
+            } else {
+                bodySeen[body] = true;
+                bodyTier[body] = tier;
+            }
+            if (accSeen[accessory]) {
+                assertEq(accTier[accessory], tier, "an accessory leaked across tiers");
+            } else {
+                accSeen[accessory] = true;
+                accTier[accessory] = tier;
+            }
+        }
+        vm.resumeGasMetering();
+
+        // Mythic exclusives really are Mythic-only.
+        assertEq(bodyTier[10], 0, "Rainbow is Mythic-only");
+        assertEq(bodyTier[27], 0, "Diamond is Mythic-only");
+        assertEq(accTier[8], 0, "Golden Crown is Mythic-only");
+        assertEq(accTier[13], 0, "Halo is Mythic-only");
+        // ...and Commons are plain.
+        assertEq(bodyTier[0], 4, "Orange is a Common body");
+        assertEq(accTier[0], 4, "No accessory is Common");
     }
 
     /// @notice The first tokens minted must not all land in one tier — early
@@ -234,27 +264,13 @@ contract UniquenessTest is TestBase {
 
     // ── helpers ──
 
-    /// @dev Mirrors OposNFT._getRarityIndex.
+    /// @dev Mirrors OposNFT._getRarityIndex: the body colour fixes the tier.
     function _tierOf(uint256 seed) internal pure returns (uint8) {
-        uint8 bodyIndex = uint8(seed % 30);
-        uint8 accessoryIndex = uint8((seed >> 24) % 15);
-        uint8 eyeIndex = uint8((seed >> 32) % 20);
-        uint8 patternIndex = uint8((seed >> 16) % 10);
-
-        uint8 score = 0;
-        if (bodyIndex == 10 || bodyIndex == 8 || bodyIndex == 19 || bodyIndex >= 27) score += 3;
-        else if (bodyIndex == 6 || bodyIndex == 16 || bodyIndex == 17 || bodyIndex == 18 || bodyIndex >= 24) score += 2;
-
-        if (accessoryIndex == 8 || accessoryIndex == 9 || accessoryIndex >= 13) score += 3;
-        else if (accessoryIndex == 1 || accessoryIndex == 2 || accessoryIndex == 6 || accessoryIndex == 11 || accessoryIndex == 12) score += 2;
-
-        if (eyeIndex == 2 || eyeIndex == 11 || eyeIndex == 13 || eyeIndex >= 17) score += 1;
-        if (patternIndex == 7 || patternIndex == 5 || patternIndex >= 8) score += 1;
-
-        if (score >= 6) return 0;
-        if (score >= 4) return 1;
-        if (score >= 3) return 2;
-        if (score >= 1) return 3;
+        uint256 body = seed % 30;
+        if (body == 10 || body == 8 || body == 19 || body >= 27) return 0;
+        if (body == 6 || body == 16 || body == 17 || body == 18 || body >= 24) return 1;
+        if (body == 5 || body == 7 || (body >= 11 && body <= 14)) return 2;
+        if (body == 15 || (body >= 20 && body <= 23)) return 3;
         return 4;
     }
 
