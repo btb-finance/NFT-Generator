@@ -14,7 +14,9 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 interface IOposRenderer {
-    function buildArt(uint256 seed) external pure returns (string memory);
+    // `view`, not `pure`: the renderer reads its sibling palette/parts
+    // contracts. Still a read-only STATICCALL from tokenURI.
+    function buildArt(uint256 seed) external view returns (string memory);
 }
 
 interface IRewardDistributorView {

@@ -4,6 +4,8 @@ pragma solidity ^0.8.30;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {OposRenderer} from "../src/OposRenderer.sol";
+import {OposPalette} from "../src/OposPalette.sol";
+import {OposParts} from "../src/OposParts.sol";
 import {OposNFT} from "../src/OposNFT.sol";
 import {NFTRewardDistributor} from "../src/NFTRewardDistributor.sol";
 
@@ -19,7 +21,7 @@ contract Deploy is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         console.log("Deploying OposRenderer...");
-        OposRenderer renderer = new OposRenderer();
+        OposRenderer renderer = new OposRenderer(address(new OposPalette()), address(new OposParts()));
         console.log("OposRenderer:", address(renderer));
 
         console.log("Deploying OposNFT...");

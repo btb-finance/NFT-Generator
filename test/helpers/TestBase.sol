@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {OposRenderer} from "../../src/OposRenderer.sol";
+import {DeployRenderer} from "./DeployRenderer.sol";
 import {OposNFT} from "../../src/OposNFT.sol";
 import {NFTRewardDistributor} from "../../src/NFTRewardDistributor.sol";
 import {MockOPOS} from "../mocks/MockOPOS.sol";
@@ -27,7 +28,7 @@ abstract contract TestBase is Test {
         }
 
         vm.startPrank(owner);
-        renderer = new OposRenderer();
+        renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
         opos = new MockOPOS();
         distributor = new NFTRewardDistributor(address(opos), address(nft));

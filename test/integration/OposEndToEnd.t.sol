@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {OposRenderer} from "../../src/OposRenderer.sol";
+import {DeployRenderer} from "../helpers/DeployRenderer.sol";
 import {OposNFT} from "../../src/OposNFT.sol";
 import {NFTRewardDistributor} from "../../src/NFTRewardDistributor.sol";
 import {OPOSSUM} from "./OPOSSUM.sol";
@@ -38,7 +39,7 @@ contract OposEndToEndTest is Test {
         // Temporary treasury = owner; re-pointed to the distributor below,
         // mirroring the production deploy order.
         opos = new OPOSSUM(address(btb), owner, owner);
-        renderer = new OposRenderer();
+        renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
         distributor = new NFTRewardDistributor(address(opos), address(nft));
         nft.setDistributor(address(distributor));

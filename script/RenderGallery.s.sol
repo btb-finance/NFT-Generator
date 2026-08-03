@@ -3,6 +3,8 @@ pragma solidity ^0.8.34;
 
 import {Script} from "forge-std/Script.sol";
 import {OposRenderer} from "../src/OposRenderer.sol";
+import {OposPalette} from "../src/OposPalette.sol";
+import {OposParts} from "../src/OposParts.sol";
 
 /// @notice Dumps a controlled QA gallery of SVGs to ./gallery/*.svg.
 ///         Run with: forge script script/RenderGallery.s.sol
@@ -19,7 +21,7 @@ contract RenderGallery is Script {
     OposRenderer r;
 
     function run() external {
-        r = new OposRenderer();
+        r = new OposRenderer(address(new OposPalette()), address(new OposParts()));
 
         // The renderer reads each trait as `(seed >> shift) % m`. Because the
         // moduli aren't powers of two, any bits ABOVE a field leak into its

@@ -3,6 +3,7 @@ pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {OposRenderer} from "../../src/OposRenderer.sol";
+import {DeployRenderer} from "../helpers/DeployRenderer.sol";
 import {OposNFT} from "../../src/OposNFT.sol";
 import {NFTRewardDistributor} from "../../src/NFTRewardDistributor.sol";
 import {ReentrantToken} from "../mocks/ReentrantToken.sol";
@@ -22,7 +23,7 @@ contract ReentrancyTest is Test {
 
     function setUp() public {
         vm.startPrank(owner);
-        renderer = new OposRenderer();
+        renderer = DeployRenderer.deploy();
         nft = new OposNFT(address(renderer));
         evil = new ReentrantToken();
         dist = new NFTRewardDistributor(address(evil), address(nft));

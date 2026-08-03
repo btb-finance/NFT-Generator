@@ -3,13 +3,14 @@ pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {OposRenderer} from "../../src/OposRenderer.sol";
+import {DeployRenderer} from "../helpers/DeployRenderer.sol";
 
 /// @notice Property fuzz for the renderer (R1–R4 in FUZZING.md).
 contract RendererFuzzTest is Test {
     OposRenderer internal renderer;
 
     function setUp() public {
-        renderer = new OposRenderer();
+        renderer = DeployRenderer.deploy();
     }
 
     // ─────────────────────────── R1 — purity / determinism ────────────────────────

@@ -64,3 +64,15 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+### Preview page
+
+`preview/index.html` is **generated** — it contains no rendering logic of its
+own. Every tile is a real `tokenURI` minted from `OposNFT` + `OposRenderer`, so
+it can never drift from `src/`. Rebuild it after changing any contract:
+
+```shell
+$ scripts/build_preview.sh            # build once
+$ scripts/build_preview.sh --watch    # rebuild automatically on src/*.sol changes
+$ open preview/index.html
+```
