@@ -370,9 +370,118 @@ contract OposNFT is ERC721, ERC2981, IERC4906, Ownable, ReentrancyGuard, EIP712 
         require(ok, "Withdraw failed");
     }
 
-    function _generateTraits(uint256 tokenId) private view returns (uint256) {
-        uint256 seed = uint256(keccak256(abi.encodePacked(block.timestamp, tokenId, msg.sender, block.prevrandao)));
-        return seed;
+    // ───────────── Guaranteed-unique trait generation ─────────────
+    //
+    // The art reads exactly six fields out of a token's seed:
+    //   body 30 · expression 10 · pattern 10 · accessory 15 · eye 20 · background 7
+    // = 6,300,000 distinct opossums. Drawing those at random from a hash gave
+    // ~617 duplicate pictures across 88,888 tokens — that is the birthday
+    // problem, not a bug, and no amount of extra hashing fixes it.
+    //
+    // So the seed is no longer drawn at random. Each tokenId is mapped through
+    // a PERMUTATION of [0, 6,300,000) — a bijection, so two different tokenIds
+    // can never land on the same combination. The resulting combination is then
+    // encoded back into a seed that the existing extraction logic decodes to
+    // exactly those six traits, which is why nothing downstream had to change.
+    //
+    // Duplicates are now impossible by construction rather than unlikely.
+
+    uint256 private constant TRAIT_COMBINATIONS = 6_300_000;
+
+    /// @dev Feistel domain: the smallest power of two above TRAIT_COMBINATIONS,
+    ///      split into two 12-bit halves.
+    uint256 private constant FEISTEL_DOMAIN = 1 << 24;
+    uint256 private constant HALF_MASK = 0xFFF;
+
+    /// @dev Fixed domain separator. Changing it reshuffles which tokenId gets
+    ///      which opossum, so it must never change after launch.
+    bytes32 private constant TRAIT_SALT = keccak256("OPOSSUM.traits.v1");
+
+    error TraitPermutationFailed();
+
+    /**
+     * @notice The trait seed for `tokenId`. Pure and public so a frontend can
+     *         render a token without touching chain state.
+     */
+    function traitSeedOf(uint256 tokenId) public pure returns (uint256) {
+        uint256 combination = _permute(tokenId);
+
+        // Split the combination index into the six trait values. This is a
+        // mixed-radix decomposition, so it is one-to-one.
+        uint256 background = combination % 7;
+        combination /= 7;
+        uint256 eye = combination % 20;
+        combination /= 20;
+        uint256 accessory = combination % 15;
+        combination /= 15;
+        uint256 pattern = combination % 10;
+        combination /= 10;
+        uint256 expression = combination % 10;
+        combination /= 10;
+        uint256 body = combination % 30;
+
+        return _encodeSeed(body, expression, pattern, accessory, eye, background);
+    }
+
+    /**
+     * @dev Bijection on [0, TRAIT_COMBINATIONS). A 4-round Feistel network
+     *      permutes [0, 2^24); cycle-walking (re-applying it until the value
+     *      lands back inside the real range) narrows that to a permutation of
+     *      exactly our domain. Each step is a bijection, so the composition is.
+     *
+     *      Roughly 2.7 walks are needed on average (2^24 / 6.3M). The bound of
+     *      256 makes failure a ~1e-52 event; reverting rather than falling back
+     *      keeps the uniqueness guarantee absolute.
+     */
+    function _permute(uint256 tokenId) private pure returns (uint256) {
+        uint256 v = tokenId;
+        for (uint256 i = 0; i < 256; ++i) {
+            uint256 l = v >> 12;
+            uint256 r = v & HALF_MASK;
+            for (uint256 round = 0; round < 4; ++round) {
+                uint256 f = uint256(keccak256(abi.encodePacked(r, round, TRAIT_SALT))) & HALF_MASK;
+                (l, r) = (r, l ^ f);
+            }
+            v = ((l << 12) | r) % FEISTEL_DOMAIN;
+            if (v < TRAIT_COMBINATIONS) return v;
+        }
+        revert TraitPermutationFailed();
+    }
+
+    /**
+     * @dev Builds a seed that decodes to exactly the six given traits.
+     *
+     *      The extractors read overlapping bit ranges (`seed % 30`,
+     *      `(seed >> 8) % 10`, ...), and because the moduli are not powers of
+     *      two, every byte leaks upward into the fields below it. So the bytes
+     *      are solved from the top down, each one chosen to cancel the leakage
+     *      from the bytes already fixed above it. A solution always exists
+     *      because a byte ranges over 256 values and every modulus is <= 30.
+     */
+    function _encodeSeed(
+        uint256 body,
+        uint256 expression,
+        uint256 pattern,
+        uint256 accessory,
+        uint256 eye,
+        uint256 background
+    ) private pure returns (uint256) {
+        uint256 acc = background;                       // byte 5 -> background
+        acc = (acc << 8) | _solve(eye, acc, 20);        // byte 4 -> eye
+        acc = (acc << 8) | _solve(accessory, acc, 15);  // byte 3 -> accessory
+        acc = (acc << 8) | _solve(pattern, acc, 10);    // byte 2 -> pattern
+        acc = (acc << 8) | _solve(expression, acc, 10); // byte 1 -> expression
+        acc = (acc << 8) | _solve(body, acc, 30);       // byte 0 -> body
+        return acc;
+    }
+
+    /// @dev The byte value b < m such that (b + higher * 256) % m == target.
+    function _solve(uint256 target, uint256 higher, uint256 m) private pure returns (uint256) {
+        return (target + m - ((higher * 256) % m)) % m;
+    }
+
+    function _generateTraits(uint256 tokenId) private pure returns (uint256) {
+        return traitSeedOf(tokenId);
     }
 
     /**
